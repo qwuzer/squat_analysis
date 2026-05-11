@@ -136,16 +136,16 @@ class SquatStateMachine:
             self._transition(State.EMPTY, ts)
             return
 
-        # Squat start detection
-        squat_thresh = self._squat_thresh(self.B1_agg, self.B1_std)
-        if agg > squat_thresh:
+        # Squat start: detect any significant deviation from B1 (up OR down)
+        squat_margin = self._squat_margin(self.B1_std)
+        if abs(agg - self.B1_agg) > squat_margin:
             self._transition(State.SQUATTING, ts)
 
     def _do_squatting(self, ts, agg, std, cop):
         self._squat_cop_buf.append((ts, cop, agg))
 
-        squat_thresh = self._squat_thresh(self.B1_agg, self.B1_std)
-        if agg <= squat_thresh:
+        squat_margin = self._squat_margin(self.B1_std)
+        if abs(agg - self.B1_agg) <= squat_margin:
             duration = ts - self._squat_start_ts
             if duration >= self._min_squat_dur:
                 self._complete_rep(ts)
@@ -161,10 +161,11 @@ class SquatStateMachine:
         pct_part = self._stand_min_pct * max(b0_agg, 1.0)
         return max(std_part, pct_part)
 
-    def _squat_thresh(self, b1_agg, b1_std):
+    def _squat_margin(self, b1_std):
+        """Deviation from B1 required to enter/exit SQUATTING state."""
         std_part = self._squat_std_fac * max(b1_std, 1.0)
-        pct_part = self._squat_min_pct * max(b1_agg, 1.0)
-        return b1_agg + max(std_part, pct_part)
+        pct_part = self._squat_min_pct * max(self.B1_agg, 1.0)
+        return max(std_part, pct_part)
 
     def _capture_B1(self):
         ch = self.stats.channel_means
@@ -182,12 +183,13 @@ class SquatStateMachine:
     def _complete_rep(self, ts):
         if not self._squat_cop_buf:
             return
-        peak   = max(self._squat_cop_buf, key=lambda e: e[2])
+        # Peak = point of maximum absolute deviation from B1 (up or down)
+        peak   = max(self._squat_cop_buf, key=lambda e: abs(e[2] - self.B1_agg))
         _, peak_cop, peak_agg = peak
         dev = (peak_cop[0] - self.CoP_B1[0], peak_cop[1] - self.CoP_B1[1])
         rep = {
             'duration':      ts - self._squat_start_ts,
-            'peak_magnitude': peak_agg - self.B1_agg,
+            'peak_magnitude': peak_agg - self.B1_agg,   # positive = above B1, negative = dip
             'cop_at_peak':   peak_cop,
             'cop_deviation': dev,
         }
