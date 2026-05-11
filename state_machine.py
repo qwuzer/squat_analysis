@@ -93,10 +93,14 @@ class SquatStateMachine:
         self.B0_agg = sum(ch)
         self.B0_std = self.stats.rolling_agg_std
 
-        # Use absolute deviation — band sensors may increase OR decrease under load
+        # Compare instantaneous aggregate against rolling B0.
+        # Using the rolling mean here would always give delta≈0 because B0 is
+        # derived from the same window — the instant reading leads the mean by
+        # the full window duration when someone steps on.
+        instant_agg = sum(self.stats.last_readings)
         margin = self._stand_margin(self.B0_agg, self.B0_std)
         self._last_margin = margin  # expose for status bar
-        if abs(agg - self.B0_agg) > margin:
+        if abs(instant_agg - self.B0_agg) > margin:
             if self._above_thresh_ts is None:
                 self._above_thresh_ts = ts
             elif ts - self._above_thresh_ts >= self._person_hold:
