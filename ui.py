@@ -313,9 +313,11 @@ class App:
         b0     = self.fsm.B0_agg
         margin = getattr(self.fsm, '_last_margin', 0.0)
         delta  = agg - b0
+        sq_margin = self.fsm._squat_margin(self.fsm.B1_std) if self.fsm.B1_agg else 0
         self._status.config(text=(
             f'agg={agg:.0f}  B0={b0:.0f}  Δ={delta:+.0f}  '
-            f'margin=±{margin:.0f}  std={std:.1f}  B1={self.fsm.B1_agg:.0f}'
+            f'stand±{margin:.0f}  std={std:.1f}  '
+            f'B1={self.fsm.B1_agg:.0f}  squat±{sq_margin:.0f}'
         ))
 
     def _update_hint(self, rx, ry):

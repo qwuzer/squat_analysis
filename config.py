@@ -29,8 +29,8 @@ STABILITY_CV_THRESH  = 0.005        # 0.5% coefficient of variation
 STABILITY_HOLD_TIME  = 2.0          # seconds
 
 # STABLE STANDING → SQUATTING: aggregate − B1 must exceed this
-SQUAT_THRESH_STD_FACTOR = 3.0
-SQUAT_THRESH_MIN_PCT    = 0.02      # 2% of B1 aggregate as floor
+SQUAT_THRESH_STD_FACTOR = 2.0
+SQUAT_THRESH_MIN_PCT    = 0.003     # 0.3% of B1 — actual squat peaks are only ~0.6–1.2% of B1
 MIN_SQUAT_DURATION      = 0.5       # seconds — reject noise spikes
 
 # Balance UI
