@@ -221,6 +221,18 @@ class App:
                      font=('Courier', 9)).pack(side='left')
             self._ch_vars.append(var)
 
+        # Step counter (from $SILUSJSTPS packets)
+        self._lbl(right, 'Steps (USJ)', pady_top=16)
+        for side, attr in [('L leg', '_left_steps_var'), ('R leg', '_right_steps_var')]:
+            row = tk.Frame(right, bg=_BG)
+            row.pack(anchor='w')
+            tk.Label(row, text=f'{side}:', bg=_BG, fg='#666',
+                     font=('Courier', 9), width=13, anchor='w').pack(side='left')
+            var = tk.StringVar(value='—')
+            tk.Label(row, textvariable=var, bg=_BG, fg=_ACCENT,
+                     font=('Courier', 9, 'bold')).pack(side='left')
+            setattr(self, attr, var)
+
         # ── Status bar ───────────────────────────────────────────────
         self._status = tk.Label(root, text='', bg='#0a0a12', fg='#555',
                                  font=('Arial', 8), anchor='w', padx=6)
@@ -266,13 +278,29 @@ class App:
             if 'error' in pkt:
                 self._status.config(text=f'Serial error: {pkt["error"]}')
                 continue
-            readings = pkt.get('readings', [])
-            if len(readings) < 4:
-                continue
-            ts = pkt['ts']
-            self.stats.push(ts, readings)
-            self.fsm.update(ts, readings)
-            changed = True
+
+            pkt_type = pkt.get('type')
+
+            if pkt_type == 'pressure':
+                readings = pkt.get('readings', [])
+                if len(readings) < 4:
+                    continue
+                self.stats.push(pkt['ts'], readings)
+                self.fsm.update(pkt['ts'], readings)
+                changed = True
+
+            elif pkt_type == 'steps':
+                self._left_steps_var.set(f"{pkt['left_steps']:.1f}")
+                self._right_steps_var.set(f"{pkt['right_steps']:.1f}")
+                changed = True
+
+            else:
+                # Legacy packets without a 'type' key (backward compat)
+                readings = pkt.get('readings', [])
+                if len(readings) >= 4:
+                    self.stats.push(pkt['ts'], readings)
+                    self.fsm.update(pkt['ts'], readings)
+                    changed = True
 
         if changed:
             self._refresh()
