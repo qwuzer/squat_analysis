@@ -32,6 +32,22 @@ SerialReader (thread) → Queue → App._poll() → ChannelStats.push() → Squa
 
 **`config.py`** — All tuneable constants: serial port/baud, rolling window durations, FSM thresholds, UI parameters.
 
+## Git workflow
+
+When pushing changes for a PR, always create a descriptive branch name instead of pushing the auto-generated worktree branch (e.g. `claude/elated-mccarthy-*`). Use the format:
+
+```
+<type>/<short-description>
+```
+
+Examples: `fix/squat-threshold`, `feat/step-counter-ui`, `refactor/serial-parser`
+
+Push like this:
+```bash
+git push origin HEAD:fix/your-description
+gh pr create --head fix/your-description ...
+```
+
 ## Key design constraints
 
 - **Band sensors, not point sensors** — each channel covers a full side of the mat. CoP is directional (which way weight is shifted), not an exact anatomical position. Never display sub-millimetre precision; use directional language and a normalised −1…+1 grid.
