@@ -68,6 +68,18 @@ S_OTHER  = '#2D7DFF'   # blue  — reserved / in-between (unused for now)
 
 NET_MAX        = 1000  # relative value that fills the bar fully
 
+# ── slope direction display ───────────────────────────────────────────────────
+# Rate of change sidesteps every baseline problem in band_state_detection.md: it
+# does not matter what a band's resting level is, nor that it never returns to it
+# after a release — only which way it is moving right now. Tilting onto the toes
+# shows up as the two front bands rising at a similar rate while the two back
+# bands fall at a similar rate, which is readable straight off the colours.
+SLOPE_N        = 21    # samples in the slope window (~0.7 s at 30 fps)
+SLOPE_DEADBAND = 200   # counts/s below this reads as flat — sits above the noise
+SLOPE_FULL     = 1200  # counts/s at which the tint reaches full intensity
+SLOPE_UP       = '#FF3B30'   # red   — value rising
+SLOPE_DOWN     = '#22C55E'   # green — value falling
+
 # ── empty/pressed state machine ───────────────────────────────────────────────
 # Each channel starts EMPTY. A sudden jump UP flips it to PRESSED; a sudden drop
 # flips it back to EMPTY and re-seeds the baseline to the new resting floor — so
@@ -79,27 +91,6 @@ ONSET_SLOPE   = 200    # raw rising ≥ this over the window  → EMPTY → PRES
 RELEASE_SLOPE = -200   # raw dropping ≤ this over the window → PRESSED → EMPTY
 RELEASE_LEVEL = 80     # net back within this of the frozen floor → PRESSED → EMPTY
 DRIFT_ALPHA   = 0.30   # baseline drift-tracking speed while EMPTY
-
-# ── per-mat balance / contact detection ───────────────────────────────────────
-# State machine per mat:  EMPTY → ADJUSTING → HOLDING
-#
-# A jump finds the *moment* someone steps on; levels decide *which* bands they
-# are standing on. Ten seconds into a still hold every band has slope ≈ 0 —
-# loaded and unloaded look identical — so contact must be read from the level
-# above the empty-mat baseline (B0), latched once the aggregate stops moving.
-#
-# Onset compares the INSTANTANEOUS aggregate against the rolling B0_agg.
-# Rolling-vs-rolling gives Δ≈0 and the transition never fires.
-B0_WINDOW     = 60     # samples of empty-mat rolling baseline (~2 s at 30 fps)
-SETTLE_WINDOW = 30     # samples of aggregate history for the settle test (~1 s)
-ONSET_AGG     = 300    # instantaneous aggregate this far above B0_agg → stepped on
-OFFSET_AGG    = 150    # ...and back below this → stepped off (hysteresis gap)
-SETTLE_STD    = 60     # aggregate std below this → settled, safe to snapshot B1
-MIN_SETTLE_S  = 1.0    # minimum time in ADJUSTING before B1 can be captured
-CONTACT_FRAC  = 0.15   # band is "in contact" at ≥ this fraction of the peak band
-
-# Balance colours: how far from their own settled neutral before it's worth flagging
-BAL_OK, BAL_WARN = 0.08, 0.20
 
 
 # ── band canvas ───────────────────────────────────────────────────────────────
@@ -114,15 +105,18 @@ class BandCanvas(tk.Canvas):
         super().__init__(parent, width=self.W, height=self.H,
                          bg=BG_MAT, highlightthickness=1,
                          highlightbackground=BORDER)
-        self._ch  = ch_num
-        self._val = 0
-        self._contact = False
+        self._ch   = ch_num
+        self._val  = 0
+        self._hist = collections.deque(maxlen=SLOPE_N)
+        self._bg   = BG_MAT
 
         # items are created once; positions/fonts are (re)set in _layout()
         self._ch_id  = self.create_text(0, 0, anchor='w', text=f'ch {ch_num}',
                                          fill=MUTED, font=('Courier', 9))
         self._val_id = self.create_text(0, 0, anchor='w', text='—',
                                          fill=FG, font=('Courier', 17, 'bold'))
+        self._slope_id = self.create_text(0, 0, anchor='e', text='',
+                                          fill=MUTED, font=('Courier', 9))
         self._track  = self.create_rectangle(0, 0, 0, 0, fill=BORDER, outline='')
         self._bar    = self.create_rectangle(0, 0, 0, 0, fill=C_LOW, outline='')
 
@@ -136,7 +130,9 @@ class BandCanvas(tk.Canvas):
         c_font = max(8, int(h * 0.13))
         self.itemconfig(self._val_id, font=('Courier', v_font, 'bold'))
         self.itemconfig(self._ch_id,  font=('Courier', c_font))
+        self.itemconfig(self._slope_id, font=('Courier', c_font))
         self.coords(self._ch_id,  pad, int(h * 0.17))
+        self.coords(self._slope_id, w - pad, int(h * 0.17))
         self.coords(self._val_id, pad, int(h * 0.52))
         bar_y1, bar_y2 = int(h * 0.82), int(h * 0.88)
         self.coords(self._track, pad, bar_y1, w - pad, bar_y2)
@@ -150,87 +146,47 @@ class BandCanvas(tk.Canvas):
         self.coords(self._bar, pad, y1, x2, y2)
 
     def set_value(self, val):
-        # pure raw display — no baseline, no zeroing, no press/empty logic.
-        # show exactly what the mat reports, with a bar scaled to full range.
+        # the number stays pure raw — no baseline, no zeroing. Only the colour
+        # is derived, and it comes from the slope, not the level.
         self._val = val
-        self.itemconfig(self._val_id, text=str(val), fill=FG)
+        self._hist.append(val)
+        self.itemconfig(self._val_id, text=str(val))
         self._draw_bar()
+        self._apply_slope()
+
+    def _slope(self):
+        """Counts per second, as the difference between the means of the two
+        halves of the window. Averaging both halves rejects far more jitter than
+        a plain endpoint difference, which rides on two single noisy samples."""
+        n = len(self._hist)
+        if n < SLOPE_N:
+            return 0.0
+        h = list(self._hist)
+        half = n // 2
+        delta = sum(h[n - half:]) / half - sum(h[:half]) / half
+        # the two half-windows have their centres (n - half) samples apart
+        return delta / ((n - half) * UPDATE_MS / 1000.0)
+
+    def _apply_slope(self):
+        s = self._slope()
+        if abs(s) < SLOPE_DEADBAND:
+            col, bg, txt = FG, BG_MAT, ''
+        else:
+            col = SLOPE_UP if s > 0 else SLOPE_DOWN
+            # intensity tracks |slope|, so bands changing at the same rate look
+            # alike — comparing rates across bands is the whole point of the view
+            bg  = _hex_shade(col, 0.12 + 0.30 * min(1.0, abs(s) / SLOPE_FULL))
+            txt = f'{s:+.0f}/s'
+        self.itemconfig(self._val_id, fill=col)
+        self.itemconfig(self._slope_id, text=txt, fill=col)
+        if bg != self._bg:                  # reconfigure only on a real change
+            self._bg = bg
+            self.config(bg=bg)
 
     def rezero(self):
-        """No-op in raw mode (kept so the 'r' key binding still works)."""
-        pass
-
-    def set_contact(self, on):
-        """Outline the band while it is carrying load (part of the contact set)."""
-        if on == self._contact:
-            return
-        self._contact = on
-        self.config(highlightbackground=S_OTHER if on else BORDER)
-        self.itemconfig(self._ch_id, fill=S_OTHER if on else MUTED)
-
-
-# ── balance strip ─────────────────────────────────────────────────────────────
-
-class BalanceStrip(tk.Canvas):
-    """Left/right balance readout, −1…+1, zeroed on the pose's settled neutral.
-
-    Bands integrate over their whole area, so this is a direction, not a
-    position: it says which way weight moved since they settled into the pose.
-    """
-
-    H   = 54
-    PAD = 16
-
-    def __init__(self, parent):
-        super().__init__(parent, height=self.H, bg=BG_MAT,
-                         highlightthickness=1, highlightbackground=BORDER)
-        self._msg   = self.create_text(0, 0, anchor='w', text='', fill=MUTED,
-                                       font=('Arial', 8))
-        self._num   = self.create_text(0, 0, anchor='e', text='', fill=MUTED,
-                                       font=('Courier', 9, 'bold'))
-        self._track = self.create_line(0, 0, 0, 0, fill=BORDER, width=2)
-        self._zero  = self.create_line(0, 0, 0, 0, fill=MUTED, width=1)
-        self._dot   = self.create_oval(0, 0, 0, 0, fill=MUTED, outline='')
-        self.itemconfigure(self._dot, state='hidden')
-        self._x     = None
-        self._geom  = (self.PAD, self.PAD + 80, 38)
-        self.bind('<Configure>', lambda e: self._layout(e.width, e.height))
-
-    def _layout(self, w, h):
-        pad, ty = self.PAD, int(h * 0.70)
-        self.coords(self._msg, pad, int(h * 0.28))
-        self.coords(self._num, w - pad, int(h * 0.28))
-        self.coords(self._track, pad, ty, w - pad, ty)
-        cx = w / 2
-        self.coords(self._zero, cx, ty - 7, cx, ty + 7)   # their own neutral
-        self._geom = (pad, w - pad, ty)
-        self._place()
-
-    def _place(self):
-        if self._x is None:
-            self.itemconfigure(self._dot, state='hidden')
-            return
-        x0, x1, ty = self._geom
-        cx = (x0 + x1) / 2
-        px = cx + (cx - x0) * max(-1.0, min(1.0, self._x))
-        r  = 6
-        self.coords(self._dot, px - r, ty - r, px + r, ty + r)
-        mag = abs(self._x)
-        col = C_LOW if mag < BAL_OK else (C_MID if mag < BAL_WARN else C_HIGH)
-        self.itemconfigure(self._dot, state='normal', fill=col)
-
-    def show(self, msg, x, msg_color=MUTED):
-        """x is the signed balance, or None to hide the dot and show msg only."""
-        self._x = x
-        self.itemconfig(self._msg, text=msg, fill=msg_color)
-        if x is None:
-            self.itemconfig(self._num, text='')
-        else:
-            side = 'centred' if abs(x) < BAL_OK else ('right' if x > 0 else 'left')
-            self.itemconfig(self._num, text=f'{abs(x):.2f} {side}',
-                            fill=FG if abs(x) >= BAL_OK else MUTED)
-        self._place()
-
+        """Forget the slope window so the colours restart from flat."""
+        self._hist.clear()
+        self._apply_slope()
 
 
 def _hex_shade(hex_col, factor):
@@ -282,155 +238,14 @@ class MatWidget(tk.Frame):
                               padx=pad[0], pady=pad[1])
                     self._bands[ch] = band
 
-        self._strip = None if empty else BalanceStrip(self)
-        if self._strip is not None:
-            self._strip.pack(fill='x', pady=(self.GAP, 0))
 
     def update(self, ch, val):
         if ch in self._bands:
             self._bands[ch].set_value(val)
 
-    def apply_state(self, st):
-        """Push one mat's contact set and balance into the widgets."""
-        for ch, band in self._bands.items():
-            band.set_contact(ch in st.contact)
-        if self._strip is None:
-            return
-        if st.state == MatState.EMPTY:
-            self._strip.show('empty — step on to begin', None)
-        elif st.state == MatState.ADJUSTING:
-            self._strip.show('settling…', None, C_MID)
-        elif not st.valid_lr:
-            # both feet inside one column: the bands cannot resolve L/R at all,
-            # so show nothing rather than a number that means nothing
-            self._strip.show('contact on one side only — reposition feet',
-                             None, C_HIGH)
-        else:
-            self._strip.show('holding', st.x)
-
     def rezero_all(self):
         for band in self._bands.values():
             band.rezero()
-
-
-# ── per-mat balance state ─────────────────────────────────────────────────────
-
-def _stdev(seq):
-    n = len(seq)
-    if n < 2:
-        return 0.0
-    mean = sum(seq) / n
-    return (sum((v - mean) ** 2 for v in seq) / n) ** 0.5
-
-
-class MatState:
-    """Empty baseline, contact set and left/right balance for one mat.
-
-    B0       — per-channel rolling mean while EMPTY. Re-seeded on every step-off,
-               because release hysteresis leaves the mat resting on a new floor
-               rather than the old one.
-    B1       — snapshot taken once the aggregate has stopped moving; net = B1 − B0.
-    contact  — bands carrying at least CONTACT_FRAC of the most-loaded band. A
-               *relative* test, so it needs no tuning per body weight.
-
-    Balance is the ratio (R − L) / (R + L) of net load, reported relative to its
-    value at settle — nobody stands symmetric, so their own neutral is the only
-    meaningful zero. Being a ratio it is unchanged by creep that scales both
-    sides alike, which is most of the drift visible on the raw charts.
-    """
-
-    EMPTY, ADJUSTING, HOLDING = 'empty', 'adjusting', 'holding'
-
-    def __init__(self, channels):
-        self.channels = tuple(channels)          # (TL, TR, BL, BR)
-        self._b0_buf  = {ch: collections.deque(maxlen=B0_WINDOW)
-                         for ch in self.channels}
-        self._agg_buf = collections.deque(maxlen=SETTLE_WINDOW)
-        self.reset()
-
-    def reset(self):
-        self.state    = self.EMPTY
-        self.B0       = None
-        self.contact  = set()
-        self.valid_lr = False
-        self.x = self.y = 0.0        # live balance, relative to settle
-        self._ref     = (0.0, 0.0)
-        self._t_enter = 0.0
-        for buf in self._b0_buf.values():
-            buf.clear()
-        self._agg_buf.clear()
-
-    def _baseline(self, oldest_half=False):
-        """Mean of the empty-mat buffer. `oldest_half` drops the newest samples,
-        which hold the ramp-up of the step that just triggered the transition."""
-        b0 = {}
-        for ch, buf in self._b0_buf.items():
-            vals = list(buf)
-            if oldest_half and len(vals) >= 4:
-                vals = vals[:len(vals) // 2]
-            b0[ch] = sum(vals) / len(vals) if vals else 0.0
-        return b0
-
-    def _nets(self, vals):
-        # clamp at 0: a band can read below B0 as load moves off it, and a
-        # negative term would distort the ratio
-        return {ch: max(0.0, vals[ch] - self.B0[ch]) for ch in self.channels}
-
-    def _cop(self, nets):
-        """Normalised −1…+1 balance. +x = right, +y = toward the top of the mat."""
-        tl, tr, bl, br = self.channels
-        total = sum(nets.values())
-        if total <= 0:
-            return 0.0, 0.0
-        x = ((nets[tr] + nets[br]) - (nets[tl] + nets[bl])) / total
-        y = ((nets[tl] + nets[tr]) - (nets[bl] + nets[br])) / total
-        return x, y
-
-    def update(self, vals, now):
-        agg = sum(vals.values())
-        self._agg_buf.append(agg)
-
-        if self.state == self.EMPTY:
-            # instantaneous aggregate vs the rolling empty baseline; comparing
-            # rolling to rolling gives Δ≈0 and this never fires
-            ready = len(self._b0_buf[self.channels[0]]) >= B0_WINDOW // 2
-            if ready and agg - sum(self._baseline().values()) > ONSET_AGG:
-                self.B0 = self._baseline(oldest_half=True)
-                self.state = self.ADJUSTING
-                self._t_enter = now
-            else:
-                for ch, v in vals.items():
-                    self._b0_buf[ch].append(v)
-            return
-
-        if agg - sum(self.B0.values()) < OFFSET_AGG:        # stepped off
-            self.reset()
-            return
-
-        if self.state == self.ADJUSTING:
-            if (now - self._t_enter >= MIN_SETTLE_S
-                    and len(self._agg_buf) >= SETTLE_WINDOW
-                    and _stdev(self._agg_buf) < SETTLE_STD):
-                self._capture(vals)
-            return
-
-        x, y = self._cop(self._nets(vals))
-        self.x, self.y = x - self._ref[0], y - self._ref[1]
-
-    def _capture(self, vals):
-        nets = self._nets(vals)
-        peak = max(nets.values())
-        self.contact = ({ch for ch, n in nets.items() if n >= CONTACT_FRAC * peak}
-                        if peak > 0 else set())
-        tl, tr, bl, br = self.channels
-        # left/right is only observable if contact straddles the L/R boundary:
-        # a band integrates over its whole area, so two feet inside one band
-        # cannot be told apart however the weight moves between them
-        self.valid_lr = bool({tl, bl} & self.contact) and bool({tr, br} & self.contact)
-        self._ref = self._cop(nets)
-        self.x = self.y = 0.0
-        self.state = self.HOLDING
-
 
 
 # ── serial reader thread ──────────────────────────────────────────────────────
@@ -510,27 +325,26 @@ class PortReader(threading.Thread):
 # ── demo mode (no serial) ─────────────────────────────────────────────────────
 
 class DemoDriver:
-    """Scripted stand-in for the hardware, so the contact/balance pipeline can be
-    exercised without a mat. Each mat plays a different case:
+    """Scripted stand-in for the hardware so the slope colours can be checked
+    without a mat. Each mat plays a different case:
 
-      Mat 1 — someone steps on and slowly leans left↔right (the normal path)
-      Mat 2 — stays empty (EMPTY never falsely triggers)
-      Mat 3 — both feet in the left column, so left/right is not observable and
-              the strip should say so instead of showing a number
+      Mat 1 — someone tilting front<->back: the two front bands rise while the
+              two back bands fall, then the reverse
+      Mat 2 — empty, so every band should stay grey: the deadband has to reject
+              jitter rather than flickering red/green
+      Mat 3 — stood on but held still — also grey, which is the case that
+              matters most for a held pose
 
-    Sustained load also creeps ~15% over the first half-minute, which is the
-    drift the ratio is supposed to cancel — watch the raw charts sag while the
-    balance dot stays put.
+    Jitter is +/-50 counts, matching the resting jitter in the hardware notes,
+    so the deadband is being tested against a realistic noise floor.
     """
 
-    REST   = 6000.0    # resting level of an unloaded band
-    STEP_T = 4.0       # seconds of empty mat before anyone steps on
-    RAMP   = 0.6       # how long the step-on takes
-    LOADS  = {         # per mat, net counts per band when standing (TL,TR,BL,BR)
-        0: (700, 700, 520, 520),
-        1: (0, 0, 0, 0),
-        2: (760, 0, 610, 0),
-    }
+    REST   = 6000.0
+    PERIOD = 5.0                # seconds per full front->back->front cycle
+    LOADS  = {0: (700, 700, 520, 520),
+              1: (0, 0, 0, 0),
+              2: (700, 700, 520, 520)}
+    TILT   = {0: 0.60, 1: 0.0, 2: 0.0}
 
     def __init__(self, data):
         self._data = data
@@ -538,19 +352,16 @@ class DemoDriver:
         self._t0   = time.monotonic()
 
     def step(self):
-        t    = time.monotonic() - self._t0
-        on   = max(0.0, min(1.0, (t - self.STEP_T) / self.RAMP))
-        held = max(0.0, t - self.STEP_T - self.RAMP)
-        creep = 1.0 - 0.15 * (1.0 - math.exp(-held / 25.0))
-        lean  = 0.35 * math.sin(2 * math.pi * held / 12.0) if held > 2 else 0.0
+        t = time.monotonic() - self._t0
         for m, channels in enumerate(MAT_CHANNELS):
             loads = self.LOADS[m]
+            tilt  = self.TILT[m] * math.sin(2 * math.pi * t / self.PERIOD)
             for i, ch in enumerate(channels):
-                # channels are ordered (TL, TR, BL, BR) → odd index is the right side
-                w = 1.0 + (lean if i % 2 else -lean)
-                v = self.REST + loads[i] * on * creep * w
+                # channels are ordered (TL, TR, BL, BR): the first two are front
+                w = 1.0 + (tilt if i < 2 else -tilt)
+                v = self.REST + loads[i] * w
                 self._data[ch] = int(max(0, min(MAX_VAL,
-                                                v + self._rng.gauss(0, 6))))
+                                                v + self._rng.gauss(0, 50))))
 
 
 # ── raw signal line chart ──────────────────────────────────────────────────────
@@ -680,15 +491,11 @@ class App:
         root.resizable(True, True)
         root.minsize(860, 660)          # below this the bands/charts would overlap
 
-        self._states = [MatState(chans) for chans in MAT_CHANNELS]
-
         self._build_ui()
 
         # press 'r' to re-capture the initial balance (aligned chart re-zeroes)
-        # and force every mat back to EMPTY so B0/B1 are taken again
         root.bind('<r>', lambda e: (self._align.rezero(),
-                                    [m.rezero_all() for m in self._mats],
-                                    [st.reset() for st in self._states]))
+                                    [m.rezero_all() for m in self._mats]))
 
         if self._demo:
             self._driver = DemoDriver(self._data)
@@ -756,16 +563,10 @@ class App:
         if self._demo:
             self._driver.step()
 
-        now = time.monotonic()
         for i, mat in enumerate(self._mats):
-            chans = MAT_CHANNELS[i]
-            for ch in chans:
+            for ch in MAT_CHANNELS[i]:
                 if ch in self._data:
                     mat.update(ch, self._data[ch])
-            if all(ch in self._data for ch in chans):
-                st = self._states[i]
-                st.update({ch: self._data[ch] for ch in chans}, now)
-                mat.apply_state(st)
 
         self._chart.push(self._data)
         self._chart.redraw()
