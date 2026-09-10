@@ -43,7 +43,7 @@ VALIDATE_CHECKSUM = True
 # (top-left, top-right, bottom-left, bottom-right)
 MAT_CHANNELS = [
     [3, 0, 2, 1],
-    [4, 6, 5, 7],
+    [4, 7, 5, 6],
     [11, 8, 10, 9],
 ]
 MAT_LABELS = ["Mat 1", "Mat 2", "Mat 3"]
@@ -80,6 +80,16 @@ SLOPE_FULL     = 1200  # counts/s at which the tint reaches full intensity
 SLOPE_UP       = '#FF3B30'   # red   — value rising
 SLOPE_DOWN     = '#22C55E'   # green — value falling
 
+# ── weight-shift arrow (one mat) ──────────────────────────────────────────────
+# Slope says how things are *changing*, not where they *are*, so the arrow is a
+# velocity: which way load is being transferred right now. That costs nothing —
+# no baseline, no calibration, nothing that can drift. The price is that it goes
+# blank when the mat is still, and a held pose is exactly that. Showing where
+# the weight *is* would need an empty-mat baseline; this deliberately does not.
+ARROW_MAT   = 1     # index into MAT_CHANNELS / MAT_LABELS — the mat in use
+ARROW_MIN   = 500   # counts/s of arrow length below which the mat reads "still"
+ARROW_FULL  = 2400  # counts/s that reaches the edge of the circle
+
 # ── empty/pressed state machine ───────────────────────────────────────────────
 # Each channel starts EMPTY. A sudden jump UP flips it to PRESSED; a sudden drop
 # flips it back to EMPTY and re-seeds the baseline to the new resting floor — so
@@ -109,6 +119,7 @@ class BandCanvas(tk.Canvas):
         self._val  = 0
         self._hist = collections.deque(maxlen=SLOPE_N)
         self._bg   = BG_MAT
+        self._slope_val = 0.0
 
         # items are created once; positions/fonts are (re)set in _layout()
         self._ch_id  = self.create_text(0, 0, anchor='w', text=f'ch {ch_num}',
@@ -154,7 +165,15 @@ class BandCanvas(tk.Canvas):
         self._draw_bar()
         self._apply_slope()
 
-    def _slope(self):
+    def slope(self):
+        """Latest rate of change in counts/s (0 until the window has filled).
+
+        Cached from the last set_value(), so callers that want the number — the
+        arrow cross — are not recomputing it a second time each frame.
+        """
+        return self._slope_val
+
+    def _compute_slope(self):
         """Counts per second, as the difference between the means of the two
         halves of the window. Averaging both halves rejects far more jitter than
         a plain endpoint difference, which rides on two single noisy samples."""
@@ -168,7 +187,7 @@ class BandCanvas(tk.Canvas):
         return delta / ((n - half) * UPDATE_MS / 1000.0)
 
     def _apply_slope(self):
-        s = self._slope()
+        s = self._slope_val = self._compute_slope()
         if abs(s) < SLOPE_DEADBAND:
             col, bg, txt = FG, BG_MAT, ''
         else:
@@ -189,6 +208,80 @@ class BandCanvas(tk.Canvas):
         self._apply_slope()
 
 
+# ── weight-shift arrow ────────────────────────────────────────────────────────
+
+class ArrowCross(tk.Canvas):
+    """Which way weight is moving on one mat, from its four band slopes.
+
+        vx = (TR + BR) − (TL + BL)      # + = toward the right
+        vy = (TL + TR) − (BL + BR)      # + = toward the front
+
+    Pressing down evenly moves all four bands the same way, so both terms
+    cancel and the arrow correctly stays put instead of reading as a shift.
+    Direction is exact; the length is a rate, not a distance.
+    """
+
+    W, H = 176, 200
+    DIRS = ['right', 'front-right', 'front', 'front-left',
+            'left', 'back-left', 'back', 'back-right']
+
+    def __init__(self, parent):
+        super().__init__(parent, width=self.W, height=self.H, bg=BG_MAT,
+                         highlightthickness=1, highlightbackground=BORDER)
+        self._ring  = self.create_oval(0, 0, 0, 0, outline=BORDER)
+        self._ax_h  = self.create_line(0, 0, 0, 0, fill=BORDER)
+        self._ax_v  = self.create_line(0, 0, 0, 0, fill=BORDER)
+        self._arrow = self.create_line(0, 0, 0, 0, fill=S_OTHER, width=3,
+                                       arrow='last', arrowshape=(11, 13, 5))
+        self._hub   = self.create_oval(0, 0, 0, 0, fill=MUTED, outline='')
+        self._edges = {k: self.create_text(0, 0, text=k, fill=MUTED,
+                                           font=('Courier', 8))
+                       for k in ('F', 'B', 'L', 'R')}
+        self._read  = self.create_text(0, 0, anchor='s', text='still',
+                                       fill=MUTED, font=('Courier', 9))
+        self.itemconfigure(self._arrow, state='hidden')
+        self._geom = (self.W / 2, self.H / 2, 60)
+        self.bind('<Configure>', lambda e: self._layout(e.width, e.height))
+
+    def _layout(self, w, h):
+        cx, cy = w / 2, (h - 16) / 2
+        r = max(20, min(w, h - 16) / 2 - 16)
+        self.coords(self._ring, cx - r, cy - r, cx + r, cy + r)
+        self.coords(self._ax_h, cx - r, cy, cx + r, cy)
+        self.coords(self._ax_v, cx, cy - r, cx, cy + r)
+        self.coords(self._hub, cx - 2, cy - 2, cx + 2, cy + 2)
+        self.coords(self._edges['F'], cx, cy - r - 7)
+        self.coords(self._edges['B'], cx, cy + r + 7)
+        self.coords(self._edges['L'], cx - r - 9, cy)
+        self.coords(self._edges['R'], cx + r + 9, cy)
+        self.coords(self._read, w / 2, h - 4)
+        self._geom = (cx, cy, r)
+        self._place()
+
+    def update_vector(self, slopes):
+        """slopes are the four band rates in (TL, TR, BL, BR) order, counts/s."""
+        tl, tr, bl, br = slopes
+        self._v = ((tr + br) - (tl + bl), (tl + tr) - (bl + br))
+        self._place()
+
+    def _place(self):
+        vx, vy = getattr(self, '_v', (0.0, 0.0))
+        cx, cy, r = self._geom
+        mag = (vx * vx + vy * vy) ** 0.5
+        if mag < ARROW_MIN:            # nothing moving faster than the noise
+            self.itemconfigure(self._arrow, state='hidden')
+            self.itemconfig(self._read, text='still', fill=MUTED)
+            return
+        frac = min(1.0, mag / ARROW_FULL)
+        # screen y grows downward, so the front of the mat is -y
+        self.coords(self._arrow, cx, cy,
+                    cx + r * frac * vx / mag, cy - r * frac * vy / mag)
+        self.itemconfigure(self._arrow, state='normal')
+        name = self.DIRS[int(round(math.atan2(vy, vx) / (math.pi / 4))) % 8]
+        self.itemconfig(self._read, text=f'{name}  {mag:.0f}/s', fill=FG)
+
+
+
 def _hex_shade(hex_col, factor):
     """Darken hex_col by scaling each channel toward black by `factor` (0..1)."""
     r = int(int(hex_col[1:3], 16) * factor)
@@ -205,6 +298,7 @@ class MatWidget(tk.Frame):
     def __init__(self, parent, label, channels, empty=False):
         super().__init__(parent, bg=BG)
         self._bands = {}
+        self._channels = tuple(channels)
 
         tk.Label(self, text=label, bg=BG, fg=MUTED,
                  font=('Arial', 9)).pack(anchor='w', pady=(0, 4))
@@ -242,6 +336,11 @@ class MatWidget(tk.Frame):
     def update(self, ch, val):
         if ch in self._bands:
             self._bands[ch].set_value(val)
+
+    def slopes(self):
+        """The four band rates in (TL, TR, BL, BR) order, counts/s."""
+        return [self._bands[ch].slope() if ch in self._bands else 0.0
+                for ch in self._channels]
 
     def rezero_all(self):
         for band in self._bands.values():
@@ -328,12 +427,11 @@ class DemoDriver:
     """Scripted stand-in for the hardware so the slope colours can be checked
     without a mat. Each mat plays a different case:
 
-      Mat 1 — someone tilting front<->back: the two front bands rise while the
-              two back bands fall, then the reverse
-      Mat 2 — empty, so every band should stay grey: the deadband has to reject
-              jitter rather than flickering red/green
-      Mat 3 — stood on but held still — also grey, which is the case that
-              matters most for a held pose
+      Mat 1 — stood on but held still: every band grey and the deadband has
+              to hold, which is the case that matters most for a held pose
+      Mat 2 — someone tilting front<->back, so the two front bands rise while
+              the two back bands fall and the arrow swings F <-> B
+      Mat 3 — empty, so every band should stay grey rather than flickering
 
     Jitter is +/-50 counts, matching the resting jitter in the hardware notes,
     so the deadband is being tested against a realistic noise floor.
@@ -342,9 +440,9 @@ class DemoDriver:
     REST   = 6000.0
     PERIOD = 5.0                # seconds per full front->back->front cycle
     LOADS  = {0: (700, 700, 520, 520),
-              1: (0, 0, 0, 0),
-              2: (700, 700, 520, 520)}
-    TILT   = {0: 0.60, 1: 0.0, 2: 0.0}
+              1: (700, 700, 520, 520),
+              2: (0, 0, 0, 0)}
+    TILT   = {0: 0.0, 1: 0.60, 2: 0.0}
 
     def __init__(self, data):
         self._data = data
@@ -541,22 +639,33 @@ class App:
         right = tk.Frame(body, bg=BG, padx=12, pady=20)
         right.grid(row=0, column=1, sticky='nsew')
         right.columnconfigure(0, weight=1)
-        right.rowconfigure(1, weight=3)     # raw chart
-        right.rowconfigure(3, weight=2)     # aligned chart
+        right.rowconfigure(3, weight=3)     # raw chart
+        right.rowconfigure(5, weight=2)     # aligned chart
+
+        # which way weight is moving on the mat in use — direction only, and
+        # blank while the mat is still (see ArrowCross)
+        tk.Label(right, text=f'{MAT_LABELS[ARROW_MAT]} — which way weight is '
+                             f'moving now',
+                 bg=BG, fg=MUTED, font=('Arial', 9)).grid(row=0, column=0, sticky='w')
+        cross_frame = tk.Frame(right, bg=BG)
+        cross_frame.grid(row=1, column=0, sticky='w', pady=(2, 0))
+        self._cross = ArrowCross(cross_frame)
+        self._cross.pack()
 
         tk.Label(right, text='Raw signal — all 12 channels',
-                 bg=BG, fg=MUTED, font=('Arial', 9)).grid(row=0, column=0, sticky='w')
+                 bg=BG, fg=MUTED, font=('Arial', 9)).grid(row=2, column=0,
+                                                          sticky='w', pady=(12, 4))
         raw_frame = tk.Frame(right, bg=BG)
-        raw_frame.grid(row=1, column=0, sticky='nsew')
+        raw_frame.grid(row=3, column=0, sticky='nsew')
         self._chart = RawChart(raw_frame, CHART_CHANNELS)
 
         # baseline-aligned view directly under the raw chart: every channel
         # zeroed to its resting level so presses stand out on a common scale
         tk.Label(right, text='Raw − initial balance — press pops above 0  (r: re-zero)',
-                 bg=BG, fg=MUTED, font=('Arial', 9)).grid(row=2, column=0,
+                 bg=BG, fg=MUTED, font=('Arial', 9)).grid(row=4, column=0,
                                                           sticky='w', pady=(12, 4))
         align_frame = tk.Frame(right, bg=BG)
-        align_frame.grid(row=3, column=0, sticky='nsew')
+        align_frame.grid(row=5, column=0, sticky='nsew')
         self._align = RawChart(align_frame, CHART_CHANNELS, zeroed=True, height=ALIGN_H)
 
     def _poll(self):
@@ -567,6 +676,8 @@ class App:
             for ch in MAT_CHANNELS[i]:
                 if ch in self._data:
                     mat.update(ch, self._data[ch])
+
+        self._cross.update_vector(self._mats[ARROW_MAT].slopes())
 
         self._chart.push(self._data)
         self._chart.redraw()
