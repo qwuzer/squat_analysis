@@ -129,7 +129,67 @@ real false-positive rate will be far lower.
 
 ---
 
-## 6. What this does not do
+## 6. The weight-shift arrow
+
+`ArrowCross` turns the four band slopes of one mat (`ARROW_MAT`, currently
+Mat 2) into a single direction:
+
+```
+vx = (TR + BR) − (TL + BL)      # + = toward the right
+vy = (TL + TR) − (BL + BR)      # + = toward the front
+```
+
+### 6.1 What it is, and what it is not
+
+> Slope says how things are **changing**, not where they **are**. The arrow is
+> therefore a *velocity*: which way load is being transferred right now.
+
+The consequence is worth being blunt about: **the arrow goes blank when the mat
+is still**, and a held yoga pose is exactly that. Showing where the weight *is*
+requires an empty-mat baseline, which this deliberately does not use. The arrow
+answers "which way are they moving", not "which way are they leaning".
+
+What it buys in exchange is that there is nothing to calibrate and nothing that
+can drift.
+
+### 6.2 Press-down rejection
+
+Pressing straight down raises all four bands together. Both expressions are
+differences between opposite pairs, so the two terms cancel and the arrow stays
+put rather than reading as a shift. Only *redistribution* moves it — which is
+the same distinction as `Σ` of the slopes (§2), from the other side.
+
+### 6.3 Thresholds
+
+| Constant | Default | Meaning |
+| --- | --- | --- |
+| `ARROW_MAT` | 1 | which mat the arrow watches (index into `MAT_CHANNELS`) |
+| `ARROW_MIN` | 500 | counts/s of arrow length below which it reads "still" |
+| `ARROW_FULL` | 2400 | counts/s that reaches the edge of the circle |
+
+Each axis sums four band slopes, so its noise is about **twice** a single band's
+(§3.1). `ARROW_MIN` is set roughly 4σ above that, which is why it is larger than
+`SLOPE_DEADBAND` rather than equal to it.
+
+### 6.4 Measured behaviour
+
+Demo mat 2 tilting front↔back on a 5 s cycle:
+
+```
+t=0.83  TL +454  TR +487  BL -343  BR -306   vx  +70  vy +1589  ->  front 1591/s
+t=3.10  TL -531  TR -497  BL +333  BR +406   vx +108  vy -1766  ->  back  1770/s
+```
+
+Sideways bleed stays under ±155 against a front/back signal of ~1770 — an angle
+error of about 5°, comfortably inside one 45° direction bin. The arrow reads
+blank on ~20 % of frames, all of them clustered around the two turning points of
+each cycle where the movement genuinely reverses through zero.
+
+It also lags by about the window length: at the true turning point (t = 1.25 s)
+it still reads `front 740/s`, catching up ~0.35 s later. That is §3.1's latency,
+not an error.
+
+## 7. What this does not do
 
 - **No sense of magnitude.** A band under 700 counts of load and one under 70
   colour identically if they are changing at the same rate. Direction only.
