@@ -251,38 +251,58 @@ integrates pressure over its whole area:
 Seeing the response curve requires changing the force on a **fixed contact
 patch**, which body weight alone cannot do. It needs a known weight.
 
-### 3.3 The protocol
+### 3.3 Why drift, not the sensor, is the hard part
 
-Nine captures, about three minutes. Two known weights (2 kg each is plenty;
-1 litre of water = 1 kg).
+The first attempt at this spread nine captures over about three minutes and
+failed outright — one of the weight steps came out **negative**.
+
+The session drifted **+1118 counts** across the mat, roughly 280 per channel, or
+~90 counts/min/channel. That is more than double the 43 counts/min an empty mat
+shows, because the mat was *loaded* for most of the session and creep under load
+is much larger than empty drift.
+
+> 4 kg is worth about 110 counts. The drift was 20× that.
+
+A palindrome cancels drift that is **linear** in time. Creep is not linear — it
+decays — so enough residue survived to flip the sign of the smaller step.
+
+### 3.4 The protocol
+
+**Setup:** put both weights on a chair or stool beside you at about hand height.
+You must be able to pick them up and put them down without moving your feet or
+bending over.
+
+**Phase 1 — chopped, for counts/kg.** Stand on the mat and alternate the weights
+on and off six times, a few seconds each:
 
 ```
-step off  →  two feet  →  ONE foot  →  two feet
-          →  +2 kg  →  +4 kg  →  +2 kg  →  two feet  →  step off
+off · ON · off · ON · off · ON · off · ON · off · ON · off · ON · off
 ```
 
-Hold the weights against your chest and stand upright. Leaning shifts load off
-the mat. Keep your feet in exactly the same spots throughout.
+Each "on" is differenced against the mean of the "off" captures **either side of
+it**, so drift that is linear across that one ~10-second cycle cancels exactly.
+Six cycles are averaged, and their spread is reported — agreement across cycles
+is the evidence that drift was controlled.
 
-The weight block is a **palindrome** — every level is measured symmetrically
-about the middle, so drift that is linear across the block cancels exactly in
-the differences. This matters: drift runs ~43 counts/min per channel, which
-summed over four bands is comparable to a 2 kg step.
+**Phase 2 — short, for the absolute numbers.** This is the part that needs a
+real empty-mat baseline, so it is kept to five quick captures:
 
-### 3.4 Three results
+```
+step off · two feet · ONE foot · two feet · step off
+```
 
-**(A) Counts per kilogram.** From the +2 kg and +4 kg steps. No baseline needed,
-because it is a difference between two loaded captures. Gives the absolute
-scale, so everything can be expressed in kg.
+### 3.5 Three results
 
-4 kg on a body moves the total load by only a few percent, over which even a
-strongly compressive sensor changes slope by under 1 %. **So (A) measures scale,
-not curvature** — the two step sizes agreeing tells you drift was controlled,
-nothing more.
+**(A) Counts per kilogram**, from phase 1. No baseline needed — it is a
+difference between two loaded captures. Gives the absolute scale, so everything
+can be stated in kg.
+
+It does **not** measure curvature. 4 kg moves the total load by a few percent,
+over which even a strongly compressive sensor changes slope by under 1 %.
 
 **(B) The full-range exponent.** This is where the lever arm is. If
-`reading ∝ force^k`, then measuring counts/kg at the top of the range and
-dividing body weight in counts by it gives `W/k`, not `W`. So:
+`reading ∝ force^k`, measuring counts/kg at the top of the range and dividing
+body weight in counts by it gives `W/k`, not `W`:
 
 ```
 k = (your real body weight) / (the weight the mat implies)
@@ -294,22 +314,22 @@ An implied weight larger than the real one means compressive.
 same contact area, so its reading should double. Indicative only — balancing on
 one foot changes how the foot presses, and the test cannot separate that out.
 
-(B) and (C) are independent. Agreement is the signal that both are trustworthy;
-the tool refuses to give a verdict if they differ by more than 0.15.
+(B) and (C) are independent. If they differ by more than 0.15 the tool gives no
+verdict and says to re-run phase 2, since (C) needs only a few seconds of
+baseline while (B) spans the whole phase.
 
-### 3.5 Verified against a simulation
+### 3.6 Verified against a simulation
 
-Simulated as an integrating band (`reading = c · force^k` per foot) with 43
-counts/min of drift:
+Simulated as an integrating band (`reading = c · force^k` per foot) with creep
+at the rate the real mat showed — 90 counts/min/channel while loaded:
 
-| Simulated | (B) | (C) | Verdict |
-| --- | --- | --- | --- |
-| `force^1.00` | 0.96 | 0.99 | **0.97** — "linear" |
-| `force^0.70` | 0.66 | 0.69 | **0.68** — "not linear", correct with `reading^1.48` |
+| Simulated | (A) counts/kg | (B) | (C) | Verdict |
+| --- | --- | --- | --- | --- |
+| `force^1.00` | 30.9 ± 0.6 | 1.00 | 0.98 | **0.99** — "linear" |
+| `force^0.70` | 21.5 ± 0.6 | 0.70 | 0.69 | **0.69** — correct with `reading^1.44` |
 
-The simulation also caught the drift-cancellation bug: selecting captures by
-name rather than by position put the no-weight level at an earlier mean time
-than the weighted ones, and the drift between them was being read as signal.
+The six cycles agree to about 2 % under drift that defeated the previous
+protocol entirely.
 
 ## 4. If it turns out nonlinear
 

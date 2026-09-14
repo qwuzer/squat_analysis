@@ -213,43 +213,25 @@ def cmd_noise(args):
 # ── linearity ─────────────────────────────────────────────────────────────────
 
 # A band integrates pressure over its whole area, which defeats the obvious
-# test. Moving a foot from one band to another leaves the pressure UNDER that
-# foot unchanged — only which band counts it changes — so the total across the
-# mat stays put however nonlinear the sensor is. To see the response curve the
-# force on a fixed contact patch has to change. That needs a known weight.
+# test: moving a foot from one band to another leaves the pressure UNDER that
+# foot unchanged, so the mat total stays put however nonlinear the sensor is.
+# The force on a fixed contact patch has to change, which needs a known weight.
 #
-# Two independent readings come out of this:
+# The hard part is that the weight is small next to the drift. Standing on the
+# mat creeps at roughly 90 counts/min per channel — around 360 across a mat,
+# against about 110 counts for 4 kg. Spreading the measurement over a few
+# minutes buries it. So phase 1 CHOPS instead: pick the weights up and put them
+# down half a dozen times, a few seconds each, and difference each "on" against
+# the "off" captures either side of it. Drift over one 10-second cycle is a few
+# counts, and the symmetric difference removes even that.
 #
-#   counts/kg   from holding known weights while standing normally. The step
-#               from +2kg to +4kg should be the same size as the step from
-#               0 to +2kg. If the second step is smaller, the sensor is
-#               compressive.
-#
-#   exponent k  from comparing the whole of body weight against those small
-#               increments. If reading ~ force^k then measuring counts/kg at
-#               the top of the range and dividing body weight in counts by it
-#               gives W/k, not W. So k = (real body weight) / (implied one).
-#               This spans the full load range instead of the last 4 kg.
-#
-# A cross-check comes free: standing on one foot doubles the force on that
-# band at the same contact area, so its reading should double.
+# Phase 2 is the part that needs an absolute baseline, so it is kept short.
 
-SEQUENCE = [
-    ('off', 'Step OFF the mat completely'),
-    ('two', 'Both feet on the mat, one foot per band, no weights'),
-    ('one', 'Stand on ONE foot only. Other foot completely off the mat, and '
-            'do not hold on to anything'),
-    ('two', 'Both feet back on, same spots, no weights'),
-    ('w1',  'Both feet, holding the FIRST weight against your chest'),
-    ('w2',  'Both feet, holding BOTH weights'),
-    ('w1',  'Both feet, holding just the FIRST weight again'),
-    ('two', 'Both feet, no weights'),
-    ('off', 'Step OFF the mat completely'),
-]
+SCALE_CYCLES = 6          # on/off alternations in phase 1
 
 
 def _hold(readers, channels, args, prompt, n, total):
-    input(f"\n  [{n}/{total}] {prompt}.\n        Hold still, then press Enter... ")
+    input(f"\n  [{n}/{total}] {prompt}\n        then press Enter... ")
     time.sleep(args.settle)
     data, t0, _ = _capture(readers, args.seconds)
     means, wob = {}, 0.0
@@ -260,10 +242,9 @@ def _hold(readers, channels, args, prompt, n, total):
             return None, None
         means[ch] = _mean(vals)
         wob = max(wob, _std(vals))
-    print(f"        total {sum(means.values()):9.0f}   wobble {wob:5.0f}")
-    if wob > args.wobble:
-        print(f"        !! you moved a lot during that capture")
-    return means, wob
+    print(f"        total {sum(means.values()):9.0f}   wobble {wob:5.0f}"
+          + ("   !! you moved a lot" if wob > args.wobble else ""))
+    return means, t0
 
 
 def cmd_linearity(args):
@@ -271,87 +252,110 @@ def cmd_linearity(args):
     if not 0 <= idx < len(MAT_CHANNELS):
         raise SystemExit(f"--mat must be 1..{len(MAT_CHANNELS)}")
     channels = MAT_CHANNELS[idx]
-    w1, w2 = args.weights
+    kg = args.weights[0] + args.weights[1]
 
-    print(f"\nLinearity test on {MAT_LABELS[idx]} (channels {channels}).")
-    print(f"Weights: {w1:g} kg and {w2:g} kg.")
-    print("\nHold the weights against your chest and stand upright — leaning")
-    print("shifts load off the mat and ruins the reading. Keep your feet in")
-    print("exactly the same spots the whole way through.")
-    print("\nThe weights go on and come back off again, so any drift over the")
-    print("session cancels instead of landing on one measurement.")
+    print(f"\nLinearity test on {MAT_LABELS[idx]} (channels {channels}), "
+          f"{kg:g} kg total.")
+    print("\nBefore you start: put both weights on a chair or stool right")
+    print("beside you, at about hand height. You need to pick them up and put")
+    print("them down WITHOUT moving your feet or bending over.")
+    print("\nPhase 1 alternates on and off several times. That is what makes")
+    print("the 4 kg readable against the mat's creep, so keep it brisk.")
     if not args.body_kg:
         print("\n  (pass --body-kg YOUR_WEIGHT for the full-range exponent)")
     input("\nPress Enter to begin... ")
 
     readers = _start_readers()
-    caps = []
-    for n, (tag, prompt) in enumerate(SEQUENCE, 1):
-        means, _ = _hold(readers, channels, args, prompt, n, len(SEQUENCE))
-        if means is None:
+    total_steps = 2 * SCALE_CYCLES + 1 + 5
+
+    # ── phase 1: chopped weight on/off ───────────────────────────────────────
+    print(f"\n{'=' * 66}")
+    print("PHASE 1 — stand on the mat, both feet, and do not move them")
+    print("=" * 66)
+    offs, ons, n = [], [], 0
+    for c in range(SCALE_CYCLES + 1):
+        n += 1
+        m, _ = _hold(readers, channels, args,
+                     "Weights DOWN (empty hands), stand still", n, total_steps)
+        if m is None:
             raise SystemExit("capture failed")
-        caps.append(means)
+        offs.append(sum(m.values()))
+        if c == SCALE_CYCLES:
+            break
+        n += 1
+        m, _ = _hold(readers, channels, args,
+                     f"Weights UP — hold both ({kg:g} kg) against your chest",
+                     n, total_steps)
+        if m is None:
+            raise SystemExit("capture failed")
+        ons.append(sum(m.values()))
+
+    # each "on" is differenced against the mean of the "off" either side, which
+    # removes any drift that is linear across that one cycle
+    diffs = [ons[i] - (offs[i] + offs[i + 1]) / 2.0 for i in range(len(ons))]
+
+    # ── phase 2: baseline, two feet, one foot ────────────────────────────────
+    print(f"\n{'=' * 66}")
+    print("PHASE 2 — keep this quick, it is the part drift can spoil")
+    print("=" * 66)
+    seq = [("Step OFF the mat completely", 'off'),
+           ("Both feet on the mat, one foot per band", 'two'),
+           ("Stand on ONE foot. Other foot right off the mat, hold nothing",
+            'one'),
+           ("Both feet back on, same spots", 'two'),
+           ("Step OFF the mat completely", 'off')]
+    p2 = []
+    for prompt, tag in seq:
+        n += 1
+        m, _ = _hold(readers, channels, args, prompt, n, total_steps)
+        if m is None:
+            raise SystemExit("capture failed")
+        p2.append(m)
     for r in readers:
         r.stop.set()
 
-    def total(i):
-        return sum(caps[i].values())
+    OFF_A, TWO_A, ONE, TWO_B, OFF_B = range(5)
 
-    # Positions in SEQUENCE. Levels are selected by POSITION, not by tag, so
-    # that each one's mean capture time is identical — the weight block is a
-    # palindrome (two, w1, w2, w1, two) centred on the w2 capture, so any drift
-    # that is linear over the block cancels exactly in the differences.
-    OFF_A, TWO_A, ONE, TWO_B, W1_A, W2, W1_B, TWO_C, OFF_B = range(9)
-
-    r0 = _mean([total(TWO_B), total(TWO_C)])       # centred on W2
-    r1 = _mean([total(W1_A), total(W1_B)])         # centred on W2
-    r2 = total(W2)
-    base = _mean([total(OFF_A), total(OFF_B)])
-
+    # ── results ──────────────────────────────────────────────────────────────
     print(f"\n{'=' * 66}\nRESULT\n")
-    drift = total(OFF_B) - total(OFF_A)
-    print(f"  empty mat moved {drift:+.0f} counts over the session")
-    print(f"  (drift plus whatever stretch standing on it left behind)")
 
-    # ── absolute scale ───────────────────────────────────────────────────────
-    step1, step2 = r1 - r0, r2 - r1
-    print(f"\n  (A) how many counts is a kilogram?")
-    lab1, lab2 = f"0 -> {w1:g}kg", f"{w1:g} -> {w1+w2:g}kg"
-    print(f"      {lab1:<12} {step1:+8.0f} counts   {step1/w1:6.1f} /kg")
-    print(f"      {lab2:<12} {step2:+8.0f} counts   {step2/w2:6.1f} /kg")
-    if step1 <= 0 or step2 <= 0:
-        print("\n      !! a step went the wrong way. The weights were not landing")
-        print("         on the mat, or drift swamped them. Stand more upright")
-        print("         and keep the captures brisk, then retry.")
+    print("  (A) how many counts is a kilogram?")
+    print(f"{'cycle':>11} {'on - off':>10} {'counts/kg':>11}")
+    for i, d in enumerate(diffs, 1):
+        print(f"{i:>11} {d:>10.0f} {d/kg:>11.1f}")
+    cpk = _mean(diffs) / kg
+    spread = _std(diffs) / kg
+    print(f"      {'mean':>4} {_mean(diffs):>10.0f} {cpk:>11.1f}  "
+          f"+/- {spread:.1f}")
+    if cpk <= 0:
+        print("\n      !! the weights did not register at all. Check they are")
+        print("         going through your body onto the mat, and that you are")
+        print("         not leaning on the chair while you lift them.")
         return
-    cpk = (step1 + step2) / (w1 + w2)
-    agree = min(step1 / w1, step2 / w2) / max(step1 / w1, step2 / w2)
-    print(f"      -> {cpk:.1f} counts/kg   (the two agree to {agree*100:.0f}%)")
-    if agree < 0.7:
-        print("      !! the two disagree badly, so drift is still leaking in.")
-        print("         Treat everything below as rough.")
-    print(f"      These 4 kg only move the load by a few percent, so this")
-    print(f"      measures scale, not curvature. Curvature comes from (B).")
+    if spread > abs(cpk) * 0.25:
+        print("\n      !! the cycles disagree a lot. Something moved between")
+        print("         captures. Results below are rough.")
 
-    # ── full range ───────────────────────────────────────────────────────────
-    net = r0 - base
+    net = _mean([sum(p2[TWO_A].values()), sum(p2[TWO_B].values())]) \
+        - _mean([sum(p2[OFF_A].values()), sum(p2[OFF_B].values())])
+    hyst = sum(p2[OFF_B].values()) - sum(p2[OFF_A].values())
     print(f"\n  (B) full-range exponent")
     print(f"      body weight reads {net:.0f} counts above empty")
-    if args.body_kg:
+    print(f"      (empty moved {hyst:+.0f} across phase 2 — drift plus stretch)")
+    k = None
+    if args.body_kg and net > 0:
         implied = net / cpk
         k = args.body_kg / implied
         print(f"      at {cpk:.1f} counts/kg that implies {implied:.0f} kg, "
               f"against your actual {args.body_kg:g} kg")
         print(f"      -> reading ~ force^{k:.2f}")
-    else:
-        k = None
+    elif not args.body_kg:
         print("      re-run with --body-kg to turn this into an exponent")
 
-    # ── cross-check ──────────────────────────────────────────────────────────
-    b0 = caps[OFF_A]
-    stood = max(channels, key=lambda c: caps[ONE][c] - b0[c])
-    n_one = caps[ONE][stood] - b0[stood]
-    n_two = _mean([caps[TWO_A][stood], caps[TWO_B][stood]]) - b0[stood]
+    b0 = p2[OFF_A]
+    stood = max(channels, key=lambda c: p2[ONE][c] - b0[c])
+    n_one = p2[ONE][stood] - b0[stood]
+    n_two = _mean([p2[TWO_A][stood], p2[TWO_B][stood]]) - b0[stood]
     print(f"\n  (C) cross-check — one foot doubles the force on ch{stood}")
     print(f"      one foot {n_one:8.0f}      two feet {n_two:8.0f}")
     k2 = None
@@ -362,19 +366,19 @@ def cmd_linearity(args):
         print("      Indicative only: balancing on one foot changes how that")
         print("      foot presses, and this cannot separate that out.")
 
-    # ── verdict ──────────────────────────────────────────────────────────────
     print(f"\n  {'-' * 62}")
     ks = [x for x in (k, k2) if x is not None]
     if not ks:
         print("  No exponent available. Re-run with --body-kg.")
         return
     if len(ks) == 2 and abs(ks[0] - ks[1]) > 0.15:
-        print(f"  (B) and (C) disagree ({ks[0]:.2f} vs {ks[1]:.2f}). Something is")
-        print("  off — most likely drift, or leaning while holding the weights.")
-        print("  Re-run before trusting either.")
+        print(f"  (B) and (C) disagree ({ks[0]:.2f} vs {ks[1]:.2f}).")
+        print("  (C) is the more trustworthy of the two — it needs only a few")
+        print("  seconds of baseline, while (B) spans the whole of phase 2.")
+        print("  Re-run phase 2 before trusting (B).")
         return
     kk = _mean(ks)
-    print(f"  VERDICT: reading ~ force^{kk:.2f}")
+    print(f"  VERDICT: reading ~ force^{kk:.2f}   ({cpk:.1f} counts/kg)")
     if abs(kk - 1.0) < 0.08:
         print("  Linear. CoP and load-fraction maths can use readings directly.")
     else:
@@ -383,10 +387,6 @@ def cmd_linearity(args):
         print(f"  Correct with reading^{1/kk:.2f} before any CoP maths.")
         print("  Slope colours, the arrow and symmetry scoring are unaffected:")
         print("  they compare directions, or equal against equal.")
-
-
-def _mean_dicts(dicts):
-    return {k: _mean([d[k] for d in dicts]) for k in dicts[0]}
 
 
 # ── analyse ───────────────────────────────────────────────────────────────────
@@ -658,8 +658,8 @@ def main():
                    metavar=('KG1', 'KG2'), help='the two known masses, in kg')
     l.add_argument('--body-kg', type=float, dest='body_kg',
                    help='your body weight, for the full-range exponent')
-    l.add_argument('--seconds', type=float, default=5.0, help='capture length')
-    l.add_argument('--settle', type=float, default=2.0,
+    l.add_argument('--seconds', type=float, default=3.0, help='capture length')
+    l.add_argument('--settle', type=float, default=1.5,
                    help='pause after you press Enter before capturing')
     l.add_argument('--wobble', type=float, default=120.0,
                    help='warn if a channel moves more than this during capture')
