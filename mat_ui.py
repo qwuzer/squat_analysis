@@ -74,8 +74,13 @@ NET_MAX        = 1000  # relative value that fills the bar fully
 # after a release — only which way it is moving right now. Tilting onto the toes
 # shows up as the two front bands rising at a similar rate while the two back
 # bands fall at a similar rate, which is readable straight off the colours.
-SLOPE_N        = 21    # samples in the slope window (~0.7 s at 30 fps)
-SLOPE_DEADBAND = 200   # counts/s below this reads as flat — sits above the noise
+# Tuned against a 60s recording taken WHILE STANDING on the mat, not an empty
+# one (docs/measurement_tools.md §1.5). Standing is the harder case: load-
+# dependent creep decorrelates the bands, and the person's own postural sway
+# lands on top. An empty mat would have suggested settings ~2x more sensitive
+# that flicker constantly once someone is on it.
+SLOPE_N        = 30    # samples in the slope window (~1.0 s at 30 fps)
+SLOPE_DEADBAND = 170   # counts/s below this reads as flat — sits above the noise
 SLOPE_FULL     = 1200  # counts/s at which the tint reaches full intensity
 SLOPE_UP       = '#FF3B30'   # red   — value rising
 SLOPE_DOWN     = '#22C55E'   # green — value falling
@@ -87,7 +92,7 @@ SLOPE_DOWN     = '#22C55E'   # green — value falling
 # blank when the mat is still, and a held pose is exactly that. Showing where
 # the weight *is* would need an empty-mat baseline; this deliberately does not.
 ARROW_MAT   = 1     # index into MAT_CHANNELS / MAT_LABELS — the mat in use
-ARROW_MIN   = 500   # counts/s of arrow length below which the mat reads "still"
+ARROW_MIN   = 200   # counts/s of arrow length below which the mat reads "still"
 ARROW_FULL  = 2400  # counts/s that reaches the edge of the circle
 
 # ── empty/pressed state machine ───────────────────────────────────────────────
