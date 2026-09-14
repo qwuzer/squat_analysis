@@ -26,8 +26,8 @@ try:
 except ImportError:                                  # pyserial is not stdlib
     serial = None
 
-from mat_ui import (BAUD, MAT_CHANNELS, MAT_LABELS, PORTS, RAW_MAX, RAW_MIN,
-                    SLOPE_N, UPDATE_MS, _checked_body)
+from mat_ui import (ARROW_MIN, BAUD, MAT_CHANNELS, MAT_LABELS, PORTS, RAW_MAX,
+                    RAW_MIN, SLOPE_DEADBAND, SLOPE_N, UPDATE_MS, _checked_body)
 
 
 # ── reader ────────────────────────────────────────────────────────────────────
@@ -138,7 +138,14 @@ def _capture(readers, seconds):
 # ── noise ─────────────────────────────────────────────────────────────────────
 
 def cmd_noise(args):
-    print(f"\nLeave the mats EMPTY and untouched for {args.seconds:.0f}s.")
+    if args.loaded:
+        # the deadband has to clear the noise DURING a pose, not just on an
+        # empty mat: creep under load is a different regime from empty drift
+        print(f"\nStand on the mat and hold as still as you can for "
+              f"{args.seconds:.0f}s.")
+    else:
+        print(f"\nLeave the mats EMPTY and untouched for {args.seconds:.0f}s.")
+        print("Stay off the floor nearby - footfall carries through.")
     input("Press Enter to start... ")
     readers = _start_readers()
     print(f"recording {args.seconds:.0f}s ...")
@@ -333,6 +340,254 @@ def cmd_linearity(args):
             print("   as an indication rather than a calibration)")
 
 
+# ── analyse ───────────────────────────────────────────────────────────────────
+
+def _pct(xs, p):
+    t = sorted(xs)
+    return t[min(len(t) - 1, int(len(t) * p))]
+
+
+def _load_csv(path):
+    """{ch: [(t, value)]} sorted by time."""
+    series = collections.defaultdict(list)
+    with open(path) as fh:
+        for row in csv.DictReader(fh):
+            series[int(row['channel'])].append((float(row['t_seconds']),
+                                                int(row['value'])))
+    for ch in series:
+        series[ch].sort()
+    return series
+
+
+def _resample(pairs, dt):
+    """Mimic the UI: every dt seconds take the most recent value. The UI polls a
+    latest-value dict, so this is what its slope window actually contains."""
+    out, i, t, end = [], 0, pairs[0][0], pairs[-1][0]
+    while t <= end:
+        while i + 1 < len(pairs) and pairs[i + 1][0] <= t:
+            i += 1
+        out.append(pairs[i][1])
+        t += dt
+    return out
+
+
+def _slope_series(vals, n, dt):
+    """BandCanvas._compute_slope run over a whole recording."""
+    half = n // 2
+    sep = (n - half) * dt
+    return [(sum(vals[i - half:i]) / half
+             - sum(vals[i - n:i - n + half]) / half) / sep
+            for i in range(n, len(vals) + 1)]
+
+
+def _arrow_mags(series, channels, n, dt):
+    """Arrow length over the recording, for one mat's (TL, TR, BL, BR)."""
+    res = {c: _resample(series[c], dt) for c in channels}
+    cut = min(len(v) for v in res.values())
+    sl = {c: _slope_series(res[c][:cut], n, dt) for c in channels}
+    m = min(len(v) for v in sl.values())
+    out = []
+    for i in range(m):
+        tl, tr, bl, br = (sl[c][i] for c in channels)
+        vx, vy = (tr + br) - (tl + bl), (tl + tr) - (bl + br)
+        out.append((vx * vx + vy * vy) ** 0.5)
+    return out
+
+
+def cmd_analyse(args):
+    series = _load_csv(args.csv)
+    if not series:
+        raise SystemExit(f"no rows in {args.csv}")
+    chs = sorted(series)
+    span = max(t for t, _ in series[chs[0]]) - min(t for t, _ in series[chs[0]])
+    rate = len(series[chs[0]]) / span
+    dt_ui = UPDATE_MS / 1000.0
+    mat = args.mat - 1
+    chans = MAT_CHANNELS[mat]
+
+    print(f"\n{args.csv}: {len(chs)} channels, {span:.1f}s at {rate:.0f} frames/s")
+    print(f"tuning for {MAT_LABELS[mat]} (channels {chans})")
+
+    # ── 1. is the spread fast jitter or slow wander? ──────────────────────────
+    print("\n" + "=" * 72)
+    print("1. jitter vs drift")
+    print("=" * 72)
+    print(f"{'ch':>4} {'total std':>10} {'sample-to-sample':>18} {'biggest step':>14}")
+    print("-" * 50)
+    fastest = 0.0
+    for ch in chs:
+        v = [x for _, x in series[ch]]
+        d = [v[i + 1] - v[i] for i in range(len(v) - 1)]
+        fast = _std(d) / (2 ** 0.5)
+        fastest = max(fastest, max(abs(x) for x in d))
+        print(f"{ch:>4} {_std(v):>10.1f} {fast:>18.1f} "
+              f"{max(abs(x) for x in d):>14}")
+    print("\n  A sample-to-sample figure far below the total std means the sensor")
+    print("  is precise and the spread is the baseline wandering, not noise.")
+    print("  Averaging cannot remove a wander; only a longer window dilutes it.")
+
+    # ── 2. does it settle, or keep moving? ────────────────────────────────────
+    print("\n" + "=" * 72)
+    print("2. is the drift stationary, or is there a warm-up?")
+    print("=" * 72)
+    nblk = max(2, int(span // 10))
+    print(f"{'block':>12} " + " ".join(f"ch{c:<5}" for c in chans))
+    print("-" * (13 + 8 * len(chans)))
+    blocks = []
+    for b in range(nblk):
+        lo, hi = span * b / nblk, span * (b + 1) / nblk
+        row = []
+        for c in chans:
+            vals = [v for t, v in series[c] if lo <= t < hi]
+            row.append(_mean(vals) if vals else 0.0)
+        blocks.append(row)
+    base = blocks[0]
+    for b, row in enumerate(blocks):
+        cells = " ".join(f"{row[i] - base[i]:+7.1f}" for i in range(len(chans)))
+        print(f"{b*span/nblk:5.0f}-{(b+1)*span/nblk:4.0f}s {cells}")
+    moves = [abs(blocks[-1][i] - blocks[0][i]) for i in range(len(chans))]
+    first = [abs(blocks[1][i] - blocks[0][i]) for i in range(len(chans))]
+    later = [abs(blocks[b + 1][i] - blocks[b][i])
+             for b in range(1, nblk - 1) for i in range(len(chans))]
+    print(f"\n  end-to-end movement: {max(moves):.0f} counts over {span:.0f}s"
+          f"  ({max(moves) * 60 / span:.0f} counts/min)")
+    if later and max(first) > 3 * _mean(later):
+        print(f"  !! the first block moves {max(first):.0f} counts vs "
+              f"{_mean(later):.0f} typical later — looks like a warm-up.")
+        print("     Let the mats sit before capturing a baseline.")
+    else:
+        print("  no warm-up transient — the drift rate looks steady throughout.")
+
+    # ── 3. how much of the wander is shared across a mat? ─────────────────────
+    print("\n" + "=" * 72)
+    print("3. is the drift shared between bands?")
+    print("=" * 72)
+    vals = {c: [v for _, v in series[c]] for c in chs}
+
+    def corr(a, b):
+        k = min(len(a), len(b))
+        a, b = a[:k], b[:k]
+        ma, mb = _mean(a), _mean(b)
+        va = sum((x - ma) ** 2 for x in a)
+        vb = sum((x - mb) ** 2 for x in b)
+        if va <= 0 or vb <= 0:
+            return 0.0
+        return sum((x - ma) * (y - mb) for x, y in zip(a, b)) / (va * vb) ** 0.5
+
+    for i, cs in enumerate(MAT_CHANNELS):
+        if not all(c in vals for c in cs):
+            continue
+        within = [corr(vals[a], vals[b])
+                  for j, a in enumerate(cs) for b in cs[j + 1:]]
+        k = min(len(vals[c]) for c in cs)
+        common = [sum(vals[c][x] for c in cs) / len(cs) for x in range(k)]
+        raw = _mean([_std(vals[c][:k]) for c in cs])
+        res = _mean([_std([vals[c][x] - common[x] for x in range(k)]) for c in cs])
+        print(f"  {MAT_LABELS[i]:<6} r={_mean(within):+.3f} between its bands   "
+              f"std {raw:5.1f} -> {res:4.1f} once the mat's common mode is "
+              f"removed ({100 * (1 - res / raw):.0f}%)")
+    cross = []
+    for i, cs in enumerate(MAT_CHANNELS):
+        for j, ds in enumerate(MAT_CHANNELS):
+            if j <= i:
+                continue
+            cross += [corr(vals[a], vals[b]) for a in cs for b in ds
+                      if a in vals and b in vals]
+    if cross:
+        print(f"  between different mats: r={_mean(cross):+.3f}")
+        print("\n  High within-mat correlation means differences between bands on")
+        print("  one mat cancel most of the drift. Low between-mat correlation")
+        print("  means that cancellation does NOT extend across mats.")
+
+    # ── 4. slope noise per band, and the deadband it implies ──────────────────
+    print("\n" + "=" * 72)
+    print(f"4. slope noise at the UI's {1/dt_ui:.0f} fps, "
+          f"{SLOPE_N}-sample ({SLOPE_N*dt_ui:.2f}s) window")
+    print("=" * 72)
+    p999 = {}
+    print(f"{'ch':>4} {'std':>8} {'p99':>8} {'p99.9':>8} {'max':>8}")
+    print("-" * 42)
+    for ch in chs:
+        sl = _slope_series(_resample(series[ch], dt_ui), SLOPE_N, dt_ui)
+        a = [abs(x) for x in sl]
+        p999[ch] = _pct(a, 0.999)
+        print(f"{ch:>4} {_std(sl):>8.0f} {_pct(a,0.99):>8.0f} {p999[ch]:>8.0f} "
+              f"{max(a):>8.0f}")
+    print()
+    for i, cs in enumerate(MAT_CHANNELS):
+        if not all(c in p999 for c in cs):
+            continue
+        w = max(p999[c] for c in cs)
+        flag = "   <-- in use" if i == mat else ""
+        now = "" if w <= SLOPE_DEADBAND else "   !! above the current deadband"
+        print(f"  {MAT_LABELS[i]:<6} worst p99.9 = {w:>4.0f} counts/s  "
+              f"-> SLOPE_DEADBAND {int(round(w*1.15/10))*10}{flag}{now}")
+
+    # ── 5. window length: sensitivity against lag ─────────────────────────────
+    print("\n" + "=" * 72)
+    print("5. what a different window length would buy")
+    print("=" * 72)
+    print(f"{'window':>9} {'samples':>9} {'band p99.9':>12} {'arrow p99.9':>13}"
+          f" {'lag':>7}")
+    print("-" * 55)
+    for secs in (0.25, 0.5, 0.7, 1.0, 1.5, 2.0, 3.0):
+        n = max(4, int(round(secs / dt_ui)))
+        band = max(_pct([abs(x) for x in
+                         _slope_series(_resample(series[c], dt_ui), n, dt_ui)],
+                        0.999) for c in chans)
+        arrow = _pct(_arrow_mags(series, chans, n, dt_ui), 0.999)
+        print(f"{secs:>8.2f}s {n:>9} {band:>12.0f} {arrow:>13.0f} "
+              f"{secs/2:>6.2f}s")
+    print("\n  Noise falling as the square root of the window is the random-walk")
+    print("  signature: the lever is window DURATION, paid for in lag.")
+
+    # ── 6. does the raw frame rate help? ──────────────────────────────────────
+    print("\n" + "=" * 72)
+    print("6. would feeding the full frame rate in help?")
+    print("=" * 72)
+    dt_raw = 1.0 / rate
+    for label, dt, secs in ((f"UI {1/dt_ui:.0f} fps", dt_ui, SLOPE_N * dt_ui),
+                            (f"raw {rate:.0f} fps", dt_raw, SLOPE_N * dt_ui)):
+        n = max(4, int(round(secs / dt)))
+        band = max(_pct([abs(x) for x in
+                         _slope_series(_resample(series[c], dt), n, dt)],
+                        0.999) for c in chans)
+        arrow = _pct(_arrow_mags(series, chans, n, dt), 0.999)
+        print(f"  {label:<12} {n:>4} samples over {secs:.2f}s   "
+              f"band {band:>5.0f}   arrow {arrow:>5.0f}")
+    print("\n  Equal numbers mean more samples buy nothing: the wander, not the")
+    print("  per-sample noise, sets the floor. Only lengthen the window.")
+
+    # ── 7. the arrow, and what it should be set to ────────────────────────────
+    print("\n" + "=" * 72)
+    print(f"7. arrow on an empty {MAT_LABELS[mat]}")
+    print("=" * 72)
+    mags = _arrow_mags(series, chans, SLOPE_N, dt_ui)
+    worst_band = max(p999[c] for c in chans)
+    print(f"  length: median {_pct(mags,0.5):.0f}  p99 {_pct(mags,0.99):.0f}  "
+          f"p99.9 {_pct(mags,0.999):.0f}  max {max(mags):.0f} counts/s")
+    print(f"  a single band on the same mat: p99.9 {worst_band:.0f} counts/s")
+    if _pct(mags, 0.999) < worst_band:
+        print("  -> the arrow is QUIETER than the bands it is built from, because")
+        print("     the shared drift cancels when opposite pairs are subtracted")
+    for name, val in (("current", ARROW_MIN),
+                      ("suggested", int(round(_pct(mags, 0.999) * 1.15 / 10)) * 10)):
+        bad = 100.0 * sum(1 for x in mags if x >= val) / len(mags)
+        print(f"  ARROW_MIN {name:>9} = {val:>4}  ->  {bad:.2f}% of frames "
+              f"would show a false arrow")
+
+    print("\n" + "=" * 72)
+    print("SUGGESTED SETTINGS")
+    print("=" * 72)
+    for i, cs in enumerate(MAT_CHANNELS):
+        if all(c in p999 for c in cs):
+            print(f"  {MAT_LABELS[i]}: SLOPE_DEADBAND "
+                  f"{int(round(max(p999[c] for c in cs)*1.15/10))*10}")
+    print(f"  ARROW_MIN = "
+          f"{int(round(_pct(mags,0.999)*1.15/10))*10}   (for {MAT_LABELS[mat]})")
+
+
+
 # ── entry point ───────────────────────────────────────────────────────────────
 
 def main():
@@ -343,6 +598,8 @@ def main():
     n = sub.add_parser('noise', help='measure resting jitter and frame rate')
     n.add_argument('--seconds', type=float, default=60.0)
     n.add_argument('--csv', help='also write every frame to this file')
+    n.add_argument('--loaded', action='store_true',
+                   help='record while standing on the mat, not empty')
     n.set_defaults(func=cmd_noise)
 
     l = sub.add_parser('linearity', help='is the reading proportional to force?')
@@ -355,6 +612,12 @@ def main():
     l.add_argument('--wobble', type=float, default=120.0,
                    help='warn if a channel moves more than this during capture')
     l.set_defaults(func=cmd_linearity)
+
+    a = sub.add_parser('analyse', help='re-analyse a CSV from `noise --csv`')
+    a.add_argument('csv', help='the file written by `noise --csv`')
+    a.add_argument('--mat', type=int, default=2,
+                   help='which mat to tune thresholds for (1-based)')
+    a.set_defaults(func=cmd_analyse)
 
     args = ap.parse_args()
     try:
