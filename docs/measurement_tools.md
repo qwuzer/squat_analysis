@@ -222,6 +222,10 @@ nothing.
 
 ## 3. `linearity` — is the reading proportional to force?
 
+```bash
+python mat_log.py linearity --mat 2 --weights 2 2 --body-kg 65
+```
+
 ### 3.1 Two independent properties
 
 | Property | Meaning | Status |
@@ -230,44 +234,82 @@ nothing.
 | **linear** | double the force gives double the reading | **unknown** |
 
 A sensor can be perfectly matched and badly nonlinear. Matched is enough for
-symmetry work — comparing left against right, or one side of a pose against the
-other, puts equal against equal and any response curve treats both the same. It
-is *not* enough for "you are 62 % on your front foot".
+symmetry work — comparing left against right puts equal against equal, and any
+response curve treats both the same. It is *not* enough for "you are 62 % on
+your front foot".
 
-### 3.2 The test
+### 3.2 Why the obvious test does not work
 
-Body weight does not change when you move it around, so if the sensor is linear
-**the total across the mat is the same however the load is distributed.**
+The first version of this test compared the mat total across three stances and
+checked it stayed constant. **That test cannot detect anything**, because a band
+integrates pressure over its whole area:
 
-Three configurations — both feet on one band, one foot on each of two, spread
-across four — each preceded by a fresh empty-mat baseline, because you are asked
-to step off first. That stops the leftover stretch from one configuration
-carrying into the next. The set runs twice with the second pass reversed, so
-drift over the session shows up as disagreement between passes rather than
-silently landing on whichever configuration went last.
+> Moving a foot from one band to another leaves the pressure *under that foot*
+> unchanged. Only which band counts it changes. So the mat total stays put
+> however nonlinear the sensor is.
 
-### 3.3 Reading the result
+Seeing the response curve requires changing the force on a **fixed contact
+patch**, which body weight alone cannot do. It needs a known weight.
 
-| Totals | Verdict | Consequence |
-| --- | --- | --- |
-| agree within ~10 % | linear enough | CoP and load fractions can use readings directly |
-| spreading load **raises** the total | compressive (`k < 1`) | ratios biased **toward the centre** |
-| spreading load **lowers** the total | expansive (`k > 1`) | the opposite bias |
+### 3.3 The protocol
 
-It also fits a rough exponent: if a band reads `force^k`, spreading the same
-weight over `N` bands gives a total proportional to `N^(1−k)`, so a line through
-(log bands, log total) has slope `1 − k`. Treat it as an indication — the band
-count comes from how concentrated the measured load was, which is itself
-affected by `k`. A real calibration needs known weights.
+Nine captures, about three minutes. Two known weights (2 kg each is plenty;
+1 litre of water = 1 kg).
 
-### 3.4 Verified against a simulation
+```
+step off  →  two feet  →  ONE foot  →  two feet
+          →  +2 kg  →  +4 kg  →  +2 kg  →  two feet  →  step off
+```
 
-| Simulated | Totals reported | Recovered `k` | Verdict |
+Hold the weights against your chest and stand upright. Leaning shifts load off
+the mat. Keep your feet in exactly the same spots throughout.
+
+The weight block is a **palindrome** — every level is measured symmetrically
+about the middle, so drift that is linear across the block cancels exactly in
+the differences. This matters: drift runs ~43 counts/min per channel, which
+summed over four bands is comparable to a 2 kg step.
+
+### 3.4 Three results
+
+**(A) Counts per kilogram.** From the +2 kg and +4 kg steps. No baseline needed,
+because it is a difference between two loaded captures. Gives the absolute
+scale, so everything can be expressed in kg.
+
+4 kg on a body moves the total load by only a few percent, over which even a
+strongly compressive sensor changes slope by under 1 %. **So (A) measures scale,
+not curvature** — the two step sizes agreeing tells you drift was controlled,
+nothing more.
+
+**(B) The full-range exponent.** This is where the lever arm is. If
+`reading ∝ force^k`, then measuring counts/kg at the top of the range and
+dividing body weight in counts by it gives `W/k`, not `W`. So:
+
+```
+k = (your real body weight) / (the weight the mat implies)
+```
+
+An implied weight larger than the real one means compressive.
+
+**(C) Cross-check.** Standing on one foot doubles the force on that band at the
+same contact area, so its reading should double. Indicative only — balancing on
+one foot changes how the foot presses, and the test cannot separate that out.
+
+(B) and (C) are independent. Agreement is the signal that both are trustworthy;
+the tool refuses to give a verdict if they differ by more than 0.15.
+
+### 3.5 Verified against a simulation
+
+Simulated as an integrating band (`reading = c · force^k` per foot) with 43
+counts/min of drift:
+
+| Simulated | (B) | (C) | Verdict |
 | --- | --- | --- | --- |
-| `force^1.00` | 706 / 706 / 701 | 1.01 | "linear enough" |
-| `force^0.70` | 706 / 868 / 1062 | 0.70 | "NOT linear" |
+| `force^1.00` | 0.96 | 0.99 | **0.97** — "linear" |
+| `force^0.70` | 0.66 | 0.69 | **0.68** — "not linear", correct with `reading^1.48` |
 
----
+The simulation also caught the drift-cancellation bug: selecting captures by
+name rather than by position put the no-weight level at an earlier mean time
+than the weighted ones, and the drift between them was being read as signal.
 
 ## 4. If it turns out nonlinear
 

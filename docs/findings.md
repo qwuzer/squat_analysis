@@ -225,7 +225,7 @@ recording would flicker constantly on a fidgetier day.
 
 | Measurement | Why it matters |
 | --- | --- |
-| **Linearity test** (`mat_log.py linearity`) | The bands are known to be *matched* (equal force gives equal readings) but not known to be *linear* (double force gives double reading). Matched is enough for symmetry. Linear is required before "62 % on your front foot" means anything |
+| **Linearity test** (`mat_log.py linearity --weights 2 2 --body-kg N`) | The bands are known to be *matched* (equal force gives equal readings) but not known to be *linear* (double force gives double reading). Matched is enough for symmetry. Linear is required before "62 % on your front foot" means anything. Needs two known weights — the first version of this test could not detect anything, because moving a foot between bands leaves the pressure under that foot unchanged |
 | **Dead-weight recording** | A dead weight gives pure sensor creep. A standing person gives creep **plus** sway. The difference isolates the sway, which tells us which one sets the floor |
 | **Port-to-mat wiring check** | Resolves 8.8 |
 

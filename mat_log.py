@@ -212,47 +212,58 @@ def cmd_noise(args):
 
 # ── linearity ─────────────────────────────────────────────────────────────────
 
-# Same body weight, three distributions. If a band's reading is proportional to
-# force, the TOTAL across the mat is the same every time — moving your weight
-# around cannot change how much of it there is. If spreading the load out raises
-# the total, the sensor is compressive (reads high per unit force when lightly
-# loaded); if it lowers it, the opposite.
-CONFIGS = [
-    ('ONE band',   'both feet together on a SINGLE band, as much weight on '
-                   'that one band as you can manage'),
-    ('TWO bands',  'one foot on each of two bands, side by side'),
-    ('FOUR bands', 'feet apart, weight spread across all four bands'),
+# A band integrates pressure over its whole area, which defeats the obvious
+# test. Moving a foot from one band to another leaves the pressure UNDER that
+# foot unchanged — only which band counts it changes — so the total across the
+# mat stays put however nonlinear the sensor is. To see the response curve the
+# force on a fixed contact patch has to change. That needs a known weight.
+#
+# Two independent readings come out of this:
+#
+#   counts/kg   from holding known weights while standing normally. The step
+#               from +2kg to +4kg should be the same size as the step from
+#               0 to +2kg. If the second step is smaller, the sensor is
+#               compressive.
+#
+#   exponent k  from comparing the whole of body weight against those small
+#               increments. If reading ~ force^k then measuring counts/kg at
+#               the top of the range and dividing body weight in counts by it
+#               gives W/k, not W. So k = (real body weight) / (implied one).
+#               This spans the full load range instead of the last 4 kg.
+#
+# A cross-check comes free: standing on one foot doubles the force on that
+# band at the same contact area, so its reading should double.
+
+SEQUENCE = [
+    ('off', 'Step OFF the mat completely'),
+    ('two', 'Both feet on the mat, one foot per band, no weights'),
+    ('one', 'Stand on ONE foot only. Other foot completely off the mat, and '
+            'do not hold on to anything'),
+    ('two', 'Both feet back on, same spots, no weights'),
+    ('w1',  'Both feet, holding the FIRST weight against your chest'),
+    ('w2',  'Both feet, holding BOTH weights'),
+    ('w1',  'Both feet, holding just the FIRST weight again'),
+    ('two', 'Both feet, no weights'),
+    ('off', 'Step OFF the mat completely'),
 ]
 
 
-def _settled_nets(readers, channels, args, prompt):
-    """Re-baseline on the empty mat, then capture one standing configuration."""
-    input(f"\n  1) Step OFF the mat completely, then press Enter... ")
+def _hold(readers, channels, args, prompt, n, total):
+    input(f"\n  [{n}/{total}] {prompt}.\n        Hold still, then press Enter... ")
     time.sleep(args.settle)
-    base, _, _ = _capture(readers, args.base_seconds)
-
-    input(f"  2) {prompt}\n     Hold still, then press Enter... ")
-    time.sleep(args.settle)
-    load, _, _ = _capture(readers, args.seconds)
-
-    nets, moved = {}, 0.0
+    data, t0, _ = _capture(readers, args.seconds)
+    means, wob = {}, 0.0
     for ch in channels:
-        b, l = base.get(ch, []), load.get(ch, [])
-        if not b or not l:
-            print(f"     !! no data for ch {ch}")
-            return None, None, None
-        nets[ch] = _mean(l) - _mean(b)
-        moved = max(moved, _std(l))
-    total = sum(max(0.0, n) for n in nets.values())
-    # participation ratio: 1.0 = all load on one band, 4.0 = evenly over four
-    pos = [max(0.0, n) for n in nets.values()]
-    n_eff = (sum(pos) ** 2 / sum(p * p for p in pos)) if sum(pos) > 0 else 0.0
-    print("     " + "  ".join(f"ch{ch}={nets[ch]:+7.0f}" for ch in channels))
-    print(f"     total={total:8.0f}   bands carrying load={n_eff:.2f}"
-          f"   wobble during capture={moved:.0f}")
-    if moved > args.wobble:
-        print(f"     !! you moved a lot during that capture — consider redoing it")
-    return total, n_eff, nets
+        vals = data.get(ch, [])
+        if not vals:
+            print(f"        !! no data for ch {ch}")
+            return None, None
+        means[ch] = _mean(vals)
+        wob = max(wob, _std(vals))
+    print(f"        total {sum(means.values()):9.0f}   wobble {wob:5.0f}")
+    if wob > args.wobble:
+        print(f"        !! you moved a lot during that capture")
+    return means, wob
 
 
 def cmd_linearity(args):
@@ -260,84 +271,122 @@ def cmd_linearity(args):
     if not 0 <= idx < len(MAT_CHANNELS):
         raise SystemExit(f"--mat must be 1..{len(MAT_CHANNELS)}")
     channels = MAT_CHANNELS[idx]
+    w1, w2 = args.weights
 
     print(f"\nLinearity test on {MAT_LABELS[idx]} (channels {channels}).")
-    print("Same body weight, three different distributions. If the sensor is")
-    print("linear the TOTAL is the same every time — redistributing your weight")
-    print("cannot change how much of it there is.\n")
-    print("The mat is re-baselined before every configuration, so the leftover")
-    print("stretch from the previous one does not carry into the next.")
+    print(f"Weights: {w1:g} kg and {w2:g} kg.")
+    print("\nHold the weights against your chest and stand upright — leaning")
+    print("shifts load off the mat and ruins the reading. Keep your feet in")
+    print("exactly the same spots the whole way through.")
+    print("\nThe weights go on and come back off again, so any drift over the")
+    print("session cancels instead of landing on one measurement.")
+    if not args.body_kg:
+        print("\n  (pass --body-kg YOUR_WEIGHT for the full-range exponent)")
     input("\nPress Enter to begin... ")
 
     readers = _start_readers()
-    runs = collections.defaultdict(list)     # name -> [(total, n_eff), ...]
-
-    for rep in range(args.repeats):
-        # alternate the order so any drift over the session averages out rather
-        # than always landing on the last configuration
-        order = CONFIGS if rep % 2 == 0 else list(reversed(CONFIGS))
-        print(f"\n{'=' * 62}\npass {rep + 1} of {args.repeats}")
-        for name, prompt in order:
-            print(f"\n-- {name} --")
-            total, n_eff, _ = _settled_nets(readers, channels, args, prompt)
-            if total is not None:
-                runs[name].append((total, n_eff))
-
+    caps = []
+    for n, (tag, prompt) in enumerate(SEQUENCE, 1):
+        means, _ = _hold(readers, channels, args, prompt, n, len(SEQUENCE))
+        if means is None:
+            raise SystemExit("capture failed")
+        caps.append(means)
     for r in readers:
         r.stop.set()
 
-    print(f"\n{'=' * 62}\nRESULT\n")
-    print(f"{'configuration':<14} {'total':>10} {'spread':>9} {'bands':>7}")
-    print("-" * 44)
-    summary = []
-    for name, _ in CONFIGS:
-        vals = runs.get(name, [])
-        if not vals:
-            continue
-        totals = [t for t, _ in vals]
-        effs = [e for _, e in vals]
-        spread = (max(totals) - min(totals)) if len(totals) > 1 else 0.0
-        print(f"{name:<14} {_mean(totals):>10.0f} {spread:>9.0f} "
-              f"{_mean(effs):>7.2f}")
-        summary.append((name, _mean(totals), _mean(effs)))
+    def total(i):
+        return sum(caps[i].values())
 
-    if len(summary) < 2:
-        print("\nnot enough configurations captured to conclude anything")
+    # Positions in SEQUENCE. Levels are selected by POSITION, not by tag, so
+    # that each one's mean capture time is identical — the weight block is a
+    # palindrome (two, w1, w2, w1, two) centred on the w2 capture, so any drift
+    # that is linear over the block cancels exactly in the differences.
+    OFF_A, TWO_A, ONE, TWO_B, W1_A, W2, W1_B, TWO_C, OFF_B = range(9)
+
+    r0 = _mean([total(TWO_B), total(TWO_C)])       # centred on W2
+    r1 = _mean([total(W1_A), total(W1_B)])         # centred on W2
+    r2 = total(W2)
+    base = _mean([total(OFF_A), total(OFF_B)])
+
+    print(f"\n{'=' * 66}\nRESULT\n")
+    drift = total(OFF_B) - total(OFF_A)
+    print(f"  empty mat moved {drift:+.0f} counts over the session")
+    print(f"  (drift plus whatever stretch standing on it left behind)")
+
+    # ── absolute scale ───────────────────────────────────────────────────────
+    step1, step2 = r1 - r0, r2 - r1
+    print(f"\n  (A) how many counts is a kilogram?")
+    lab1, lab2 = f"0 -> {w1:g}kg", f"{w1:g} -> {w1+w2:g}kg"
+    print(f"      {lab1:<12} {step1:+8.0f} counts   {step1/w1:6.1f} /kg")
+    print(f"      {lab2:<12} {step2:+8.0f} counts   {step2/w2:6.1f} /kg")
+    if step1 <= 0 or step2 <= 0:
+        print("\n      !! a step went the wrong way. The weights were not landing")
+        print("         on the mat, or drift swamped them. Stand more upright")
+        print("         and keep the captures brisk, then retry.")
         return
+    cpk = (step1 + step2) / (w1 + w2)
+    agree = min(step1 / w1, step2 / w2) / max(step1 / w1, step2 / w2)
+    print(f"      -> {cpk:.1f} counts/kg   (the two agree to {agree*100:.0f}%)")
+    if agree < 0.7:
+        print("      !! the two disagree badly, so drift is still leaking in.")
+        print("         Treat everything below as rough.")
+    print(f"      These 4 kg only move the load by a few percent, so this")
+    print(f"      measures scale, not curvature. Curvature comes from (B).")
 
-    ref_name, ref_total, _ = summary[0]
-    print(f"\nrelative to '{ref_name}':")
-    for name, total, _ in summary[1:]:
-        pct = 100.0 * (total / ref_total - 1.0) if ref_total else 0.0
-        print(f"  {name:<14} {total / ref_total:5.2f}x  ({pct:+.0f}%)")
-
-    worst = max(abs(t / ref_total - 1.0) for _, t, _ in summary) if ref_total else 0
-    print()
-    if worst < 0.10:
-        print(f"  Totals agree within {worst * 100:.0f}% — linear enough. CoP and")
-        print("  load-fraction maths can use the readings directly.")
+    # ── full range ───────────────────────────────────────────────────────────
+    net = r0 - base
+    print(f"\n  (B) full-range exponent")
+    print(f"      body weight reads {net:.0f} counts above empty")
+    if args.body_kg:
+        implied = net / cpk
+        k = args.body_kg / implied
+        print(f"      at {cpk:.1f} counts/kg that implies {implied:.0f} kg, "
+              f"against your actual {args.body_kg:g} kg")
+        print(f"      -> reading ~ force^{k:.2f}")
     else:
-        print(f"  Totals disagree by up to {worst * 100:.0f}% — NOT linear.")
-        print("  Symmetry comparisons are still fine (equal vs equal), but any")
-        print("  'you are 62% on your front foot' number will be biased.")
+        k = None
+        print("      re-run with --body-kg to turn this into an exponent")
 
-    # reading ~ force^k over an N-band even split gives total ~ N^(1-k),
-    # so a straight line through (log N_eff, log total) has slope 1-k
-    pts = [(e, t) for _, t, e in summary if e > 0 and t > 0]
-    if len(pts) >= 2:
-        xs = [math.log(e) for e, _ in pts]
-        ys = [math.log(t) for _, t in pts]
-        mx, my = _mean(xs), _mean(ys)
-        den = sum((x - mx) ** 2 for x in xs)
-        if den > 0:
-            k = 1.0 - sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / den
-            print(f"\n  rough exponent: reading ~ force^{k:.2f}"
-                  f"   (1.00 would be perfectly linear)")
-            if abs(k - 1.0) >= 0.10:
-                print(f"  a correction of force ~ reading^{1 / k:.2f} would "
-                      f"straighten it out")
-            print("  (estimated from how concentrated the load was, so treat it")
-            print("   as an indication rather than a calibration)")
+    # ── cross-check ──────────────────────────────────────────────────────────
+    b0 = caps[OFF_A]
+    stood = max(channels, key=lambda c: caps[ONE][c] - b0[c])
+    n_one = caps[ONE][stood] - b0[stood]
+    n_two = _mean([caps[TWO_A][stood], caps[TWO_B][stood]]) - b0[stood]
+    print(f"\n  (C) cross-check — one foot doubles the force on ch{stood}")
+    print(f"      one foot {n_one:8.0f}      two feet {n_two:8.0f}")
+    k2 = None
+    if n_two > 0 and n_one > 0:
+        ratio = n_one / n_two
+        k2 = math.log(ratio, 2)
+        print(f"      ratio {ratio:.2f}  (2.00 if linear)  -> force^{k2:.2f}")
+        print("      Indicative only: balancing on one foot changes how that")
+        print("      foot presses, and this cannot separate that out.")
+
+    # ── verdict ──────────────────────────────────────────────────────────────
+    print(f"\n  {'-' * 62}")
+    ks = [x for x in (k, k2) if x is not None]
+    if not ks:
+        print("  No exponent available. Re-run with --body-kg.")
+        return
+    if len(ks) == 2 and abs(ks[0] - ks[1]) > 0.15:
+        print(f"  (B) and (C) disagree ({ks[0]:.2f} vs {ks[1]:.2f}). Something is")
+        print("  off — most likely drift, or leaning while holding the weights.")
+        print("  Re-run before trusting either.")
+        return
+    kk = _mean(ks)
+    print(f"  VERDICT: reading ~ force^{kk:.2f}")
+    if abs(kk - 1.0) < 0.08:
+        print("  Linear. CoP and load-fraction maths can use readings directly.")
+    else:
+        print(f"  NOT linear. Load fractions would be biased "
+              f"{'toward the centre' if kk < 1 else 'toward the extremes'}.")
+        print(f"  Correct with reading^{1/kk:.2f} before any CoP maths.")
+        print("  Slope colours, the arrow and symmetry scoring are unaffected:")
+        print("  they compare directions, or equal against equal.")
+
+
+def _mean_dicts(dicts):
+    return {k: _mean([d[k] for d in dicts]) for k in dicts[0]}
 
 
 # ── analyse ───────────────────────────────────────────────────────────────────
@@ -605,9 +654,11 @@ def main():
 
     l = sub.add_parser('linearity', help='is the reading proportional to force?')
     l.add_argument('--mat', type=int, default=2, help='which mat (1-based)')
-    l.add_argument('--repeats', type=int, default=2, help='passes over the set')
+    l.add_argument('--weights', type=float, nargs=2, default=[2.0, 2.0],
+                   metavar=('KG1', 'KG2'), help='the two known masses, in kg')
+    l.add_argument('--body-kg', type=float, dest='body_kg',
+                   help='your body weight, for the full-range exponent')
     l.add_argument('--seconds', type=float, default=5.0, help='capture length')
-    l.add_argument('--base-seconds', type=float, default=4.0, dest='base_seconds')
     l.add_argument('--settle', type=float, default=2.0,
                    help='pause after you press Enter before capturing')
     l.add_argument('--wobble', type=float, default=120.0,
