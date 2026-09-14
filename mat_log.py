@@ -538,8 +538,9 @@ def cmd_analyse(args):
         arrow = _pct(_arrow_mags(series, chans, n, dt_ui), 0.999)
         print(f"{secs:>8.2f}s {n:>9} {band:>12.0f} {arrow:>13.0f} "
               f"{secs/2:>6.2f}s")
-    print("\n  Noise falling as the square root of the window is the random-walk")
-    print("  signature: the lever is window DURATION, paid for in lag.")
+    print("\n  More seconds is the only lever that works (see 6). But a window")
+    print("  longer than the movement averages that movement away too, so match")
+    print("  it to the timescale you want to see, not to the lowest noise.")
 
     # ── 6. does the raw frame rate help? ──────────────────────────────────────
     print("\n" + "=" * 72)
@@ -560,7 +561,7 @@ def cmd_analyse(args):
 
     # ── 7. the arrow, and what it should be set to ────────────────────────────
     print("\n" + "=" * 72)
-    print(f"7. arrow on an empty {MAT_LABELS[mat]}")
+    print(f"7. arrow on {MAT_LABELS[mat]}")
     print("=" * 72)
     mags = _arrow_mags(series, chans, SLOPE_N, dt_ui)
     worst_band = max(p999[c] for c in chans)
