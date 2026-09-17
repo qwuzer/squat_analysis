@@ -1,6 +1,6 @@
 # Pressure Mat — Findings, Settings and Open Questions
 
-**Last updated:** 2026-09-14 · Update this file whenever a new measurement lands.
+**Last updated:** 2026-09-17 · Update this file whenever a new measurement lands.
 
 This is the living summary. For detail see
 [`band_state_detection.md`](band_state_detection.md),
@@ -233,6 +233,7 @@ recording would flicker constantly on a fidgetier day.
 
 | Feature | Depends on |
 | --- | --- |
+| ~~Session recording~~ — **done**, see [`recording_format.md`](recording_format.md) | — |
 | **Per-session calibration** — 10 seconds of quiet standing, measure that person's own floor, set the threshold from it | Nothing. This is the answer to 8.1, and the same 10 seconds gives the stability score its zero point |
 | **Stability score** — sway per second over the hold | Nothing. Reference-free |
 | **Per-mat deadbands** | Nothing. Answers 8.2 |

@@ -4,3 +4,4 @@ profiles.json
 
 # measurement output
 *.csv
+recordings/
