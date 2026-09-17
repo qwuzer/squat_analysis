@@ -5,3 +5,6 @@ profiles.json
 # measurement output
 *.csv
 recordings/
+
+# reference papers, kept locally
+*.pdf
