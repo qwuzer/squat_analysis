@@ -9,10 +9,13 @@ Run: python mat_ui.py
 
 import collections
 import math
+import os
 import random
 import threading
 import time
 import tkinter as tk
+
+from recorder import Recorder
 
 try:
     import serial
@@ -94,6 +97,16 @@ SLOPE_DOWN     = '#22C55E'   # green — value falling
 ARROW_MAT   = 1     # index into MAT_CHANNELS / MAT_LABELS — the mat in use
 ARROW_MIN   = 200   # counts/s of arrow length below which the mat reads "still"
 ARROW_FULL  = 2400  # counts/s that reaches the edge of the circle
+
+# ── recording ─────────────────────────────────────────────────────────────────
+# Sessions are written next to the app in the same shape the bicep pipeline
+# reads: uniform grid, wall-clock Time column, one column per channel. See
+# recorder.py for why metadata goes in a sidecar instead of repeated columns.
+RECORD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          'recordings')
+RECORD_HZ  = 100    # matches what the mats actually emit
+REC_ON     = '#FF3B30'
+REC_OFF    = '#3a3a4a'
 
 # ── empty/pressed state machine ───────────────────────────────────────────────
 # Each channel starts EMPTY. A sudden jump UP flips it to PRESSED; a sudden drop
@@ -382,6 +395,7 @@ class PortReader(threading.Thread):
         self._offset   = ch_offset
         self.status    = 'connecting…'
         self.bad       = 0           # count of frames rejected by checksum
+        self.frames    = 0           # accepted frames, for the session sidecar
 
     def run(self):
         # outer loop: if the port drops or errors, back off and reconnect
@@ -405,6 +419,7 @@ class PortReader(threading.Thread):
                         fields = body.split(',')
                         if len(fields) < 5:
                             continue
+                        self.frames += 1
                         try:
                             num_ch = int(fields[3])
                         except ValueError:
@@ -588,6 +603,7 @@ class App:
         self.root  = root
         self._data = {}
         self._demo = not HAS_SERIAL
+        self._recorder = Recorder(self._data, range(4 * len(PORTS)), RECORD_HZ)
 
         root.title('Yoga Mat Monitor')
         root.configure(bg=BG)
@@ -596,9 +612,11 @@ class App:
 
         self._build_ui()
 
-        # press 'r' to re-capture the initial balance (aligned chart re-zeroes)
-        root.bind('<r>', lambda e: (self._align.rezero(),
-                                    [m.rezero_all() for m in self._mats]))
+        # press 'r' to re-capture the initial balance (aligned chart re-zeroes),
+        # 'm' to drop a label. Both are ignored while a text box has focus.
+        root.bind('<r>', lambda e: None if self._typing() else
+                  (self._align.rezero(), [m.rezero_all() for m in self._mats]))
+        root.bind('<m>', lambda e: None if self._typing() else self._mark())
 
         if self._demo:
             self._driver = DemoDriver(self._data)
@@ -616,6 +634,8 @@ class App:
         self._status = tk.Label(self.root, text='', bg='#0a0a12',
                                  fg=MUTED, font=('Arial', 8), anchor='w', padx=8)
         self._status.pack(fill='x', side='bottom')
+        self._build_record_bar()
+
 
         body = tk.Frame(self.root, bg=BG)
         body.pack(fill='both', expand=True)
@@ -673,6 +693,83 @@ class App:
         align_frame.grid(row=5, column=0, sticky='nsew')
         self._align = RawChart(align_frame, CHART_CHANNELS, zeroed=True, height=ALIGN_H)
 
+    def _build_record_bar(self):
+        """Subject, label, and start/stop — sits above the status bar."""
+        bar = tk.Frame(self.root, bg='#12121e', padx=10, pady=7)
+        bar.pack(fill='x', side='bottom')
+
+        def label(text):
+            tk.Label(bar, text=text, bg='#12121e', fg=MUTED,
+                     font=('Arial', 8)).pack(side='left', padx=(0, 4))
+
+        def entry(width, default=''):
+            e = tk.Entry(bar, width=width, bg=BG_MAT, fg=FG, insertbackground=FG,
+                         relief='flat', highlightthickness=1,
+                         highlightbackground=BORDER, highlightcolor=S_OTHER,
+                         font=('Arial', 9))
+            e.insert(0, default)
+            e.pack(side='left', padx=(0, 14))
+            return e
+
+        label('subject')
+        self._subject = entry(14)
+        label('label')
+        self._label = entry(18)
+
+        self._rec_btn = tk.Button(bar, text='\u25cf  Record', width=11,
+                                  bg=REC_OFF, fg=FG, activebackground=REC_ON,
+                                  activeforeground=FG, relief='flat',
+                                  font=('Arial', 9, 'bold'), cursor='hand2',
+                                  command=self._toggle_record)
+        self._rec_btn.pack(side='left', padx=(0, 8))
+
+        self._mark_btn = tk.Button(bar, text='Mark  (m)', width=10,
+                                   bg=REC_OFF, fg=MUTED, relief='flat',
+                                   font=('Arial', 9), cursor='hand2',
+                                   command=self._mark, state='disabled')
+        self._mark_btn.pack(side='left', padx=(0, 14))
+
+        self._rec_status = tk.Label(bar, text='not recording', bg='#12121e',
+                                    fg=MUTED, font=('Courier', 9), anchor='w')
+        self._rec_status.pack(side='left', fill='x', expand=True)
+
+    def _typing(self):
+        """True while a text box has focus, so hotkeys do not steal keystrokes."""
+        return isinstance(self.root.focus_get(), tk.Entry)
+
+    def _toggle_record(self):
+        if self._recorder.active:
+            meta = self._recorder.stop(self._port_stats())
+            self._rec_btn.config(text='\u25cf  Record', bg=REC_OFF)
+            self._mark_btn.config(state='disabled', fg=MUTED)
+            self._rec_status.config(
+                text=f"saved {os.path.basename(self._recorder.path)}  "
+                     f"({meta['rows']} rows, {meta['events']} marks)", fg=FG)
+        else:
+            subject = self._subject.get().strip() or 'session'
+            path = self._recorder.start(RECORD_DIR, subject, meta={
+                'mat_channels': {MAT_LABELS[i]: chans
+                                 for i, chans in enumerate(MAT_CHANNELS)},
+                'ports': PORTS,
+                'baud': BAUD,
+                'demo': self._demo,
+            })
+            self._rec_btn.config(text='\u25a0  Stop', bg=REC_ON)
+            self._mark_btn.config(state='normal', fg=FG)
+            self._rec_status.config(text=f'recording to {os.path.basename(path)}')
+        self.root.focus_set()
+
+    def _mark(self):
+        text = self._label.get().strip() or 'mark'
+        if self._recorder.mark(text):
+            self._rec_status.config(text=f"marked '{text}' at "
+                                         f"{self._recorder.elapsed:6.1f}s")
+
+    def _port_stats(self):
+        return {r.port: {'frames': r.frames, 'bad_checksum': r.bad,
+                         'status': r.status}
+                for r in getattr(self, '_readers', [])}
+
     def _poll(self):
         if self._demo:
             self._driver.step()
@@ -689,6 +786,12 @@ class App:
 
         self._align.push(self._data)
         self._align.redraw()
+
+        if self._recorder.active:
+            t = self._recorder.elapsed
+            self._rec_status.config(
+                text=f'\u25cf REC  {int(t)//60:02d}:{int(t)%60:02d}   '
+                     f'{self._recorder.rows:,} rows', fg=REC_ON)
 
         if self._demo:
             self._status.config(text='demo mode  —  pyserial not found or no ports')
