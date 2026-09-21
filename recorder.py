@@ -159,3 +159,53 @@ class Recorder:
                 if now - last_flush >= self.FLUSH_EVERY:
                     fh.flush()
                     last_flush = now
+
+
+# ── joining marks back onto the signal ────────────────────────────────────────
+
+def merge_labels(signal_csv, events_csv=None, out_csv=None, none_label=''):
+    """Write a copy of the signal with a `label` column filled from the marks.
+
+    A mark applies from its own timestamp until the next one, so a held pose is
+    the span between two marks. A mark labelled `end` or `-` closes the current
+    span without opening a new one.
+
+    Storage keeps the two apart — re-labelling never rewrites a signal file, and
+    two people can label the same session independently. This is the joined view
+    for tools that want one flat table, generated on demand rather than baked in.
+    """
+    base = signal_csv[:-4]
+    events_csv = events_csv or base + '_events.csv'
+    out_csv = out_csv or base + '_labelled.csv'
+
+    marks = []
+    if os.path.exists(events_csv):
+        with open(events_csv, newline='', encoding='utf-8') as fh:
+            for row in csv.DictReader(fh):
+                label = row['label'].strip()
+                marks.append((float(row['elapsed_s']),
+                              none_label if label in ('end', '-') else label))
+    marks.sort()
+
+    n, i, current = 0, 0, none_label
+    with open(signal_csv, newline='', encoding='utf-8') as src, \
+            open(out_csv, 'w', newline='', encoding='utf-8') as dst:
+        reader = csv.reader(src)
+        writer = csv.writer(dst)
+        writer.writerow(next(reader) + ['label'])
+        for row in reader:
+            t = float(row[1])                      # elapsed_s
+            while i < len(marks) and marks[i][0] <= t:
+                current = marks[i][1]
+                i += 1
+            writer.writerow(row + [current])
+            n += 1
+    return out_csv, n, len(marks)
+
+
+if __name__ == '__main__':
+    import sys
+    if len(sys.argv) != 3 or sys.argv[1] != 'merge':
+        raise SystemExit("usage: python recorder.py merge <session.csv>")
+    path, rows, marks = merge_labels(sys.argv[2])
+    print(f"{rows:,} rows, {marks} marks -> {path}")

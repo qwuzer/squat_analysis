@@ -61,7 +61,33 @@ later.
 
 ---
 
-## 3. How sampling works, and what it costs
+## 3. Getting the marks back onto the signal
+
+Marks are **not** a column in the signal file. To produce one:
+
+```bash
+python recorder.py merge recordings/subj_20260917_173508.csv
+```
+
+That writes `..._labelled.csv` — the same rows plus a `label` column.
+
+A mark applies **from its own timestamp until the next one**, so a held pose is
+the span between two marks. A mark labelled `end` or `-` closes the current span
+without opening a new one.
+
+```
+  0.011s  label -> ''
+  1.230s  label -> 'warrior2'
+  1.641s  label -> 'tree'
+```
+
+Storing them apart and joining on demand is deliberate: re-labelling never
+rewrites a signal file, two people can label the same session independently so
+agreement can be measured, and tools that want one flat table still get one.
+
+---
+
+## 4. How sampling works, and what it costs
 
 Each mat emits at ~100 Hz on its own clock, and the reader threads keep only the
 latest value per channel. The recorder samples that shared state on a **fixed
@@ -88,7 +114,7 @@ only at the very start, or if a port drops out mid-session.
 
 ---
 
-## 4. Verified
+## 5. Verified
 
 A demo session recorded through the real UI:
 
@@ -102,7 +128,7 @@ A demo session recorded through the real UI:
 
 ---
 
-## 5. Known limits
+## 6. Known limits
 
 - **One grid for all three mats.** Fine while they all run at 100 Hz. If a
   future device runs at a different rate it needs its own stream, not a column
