@@ -28,6 +28,9 @@ import threading
 import time
 
 
+EVENT_COLUMNS = ['Time', 'elapsed_s', 'pose', 'label']
+
+
 def clock_str(t):
     """`H-MM-SS.fff`, the format the bicep pipeline's parser expects."""
     lt = time.localtime(t)
@@ -100,12 +103,14 @@ class Recorder:
         self._thread.start()
         return self.path
 
-    def mark(self, label):
-        """Drop a timestamped label. Ignored when not recording."""
+    def mark(self, label, pose=''):
+        """Drop a timestamped mark carrying the current pose and a label.
+        Ignored when not recording."""
         if not self.active:
             return False
         self.events.append({'Time': clock_str(time.time()),
                             'elapsed_s': round(self.elapsed, 4),
+                            'pose': pose,
                             'label': label})
         return True
 
@@ -127,7 +132,7 @@ class Recorder:
         with open(base + '.json', 'w', encoding='utf-8') as fh:
             json.dump(self._meta, fh, indent=2, ensure_ascii=False)
         with open(base + '_events.csv', 'w', newline='', encoding='utf-8') as fh:
-            w = csv.DictWriter(fh, fieldnames=['Time', 'elapsed_s', 'label'])
+            w = csv.DictWriter(fh, fieldnames=EVENT_COLUMNS)
             w.writeheader()
             w.writerows(self.events)
         return self._meta
@@ -164,11 +169,13 @@ class Recorder:
 # ── joining marks back onto the signal ────────────────────────────────────────
 
 def merge_labels(signal_csv, events_csv=None, out_csv=None, none_label=''):
-    """Write a copy of the signal with a `label` column filled from the marks.
+    """Write a copy of the signal with `pose` and `label` columns from the marks.
 
     A mark applies from its own timestamp until the next one, so a held pose is
     the span between two marks. A mark labelled `end` or `-` closes the current
-    span without opening a new one.
+    span — clearing both columns — without opening a new one. Event files
+    recorded before the pose field existed have no `pose` column; they merge
+    with an empty pose.
 
     Storage keeps the two apart — re-labelling never rewrites a signal file, and
     two people can label the same session independently. This is the joined view
@@ -183,22 +190,24 @@ def merge_labels(signal_csv, events_csv=None, out_csv=None, none_label=''):
         with open(events_csv, newline='', encoding='utf-8') as fh:
             for row in csv.DictReader(fh):
                 label = row['label'].strip()
-                marks.append((float(row['elapsed_s']),
-                              none_label if label in ('end', '-') else label))
-    marks.sort()
+                pose = (row.get('pose') or '').strip()
+                if label in ('end', '-'):
+                    pose, label = none_label, none_label
+                marks.append((float(row['elapsed_s']), pose, label))
+    marks.sort(key=lambda m: m[0])
 
-    n, i, current = 0, 0, none_label
+    n, i, current = 0, 0, (none_label, none_label)
     with open(signal_csv, newline='', encoding='utf-8') as src, \
             open(out_csv, 'w', newline='', encoding='utf-8') as dst:
         reader = csv.reader(src)
         writer = csv.writer(dst)
-        writer.writerow(next(reader) + ['label'])
+        writer.writerow(next(reader) + ['pose', 'label'])
         for row in reader:
             t = float(row[1])                      # elapsed_s
             while i < len(marks) and marks[i][0] <= t:
-                current = marks[i][1]
+                current = marks[i][1:]
                 i += 1
-            writer.writerow(row + [current])
+            writer.writerow(row + list(current))
             n += 1
     return out_csv, n, len(marks)
 

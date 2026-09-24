@@ -51,25 +51,23 @@ MAT_CHANNELS = [
 ]
 MAT_LABELS = ["Mat 1", "Mat 2", "Mat 3"]
 
-# ── palette ───────────────────────────────────────────────────────────────────
-BG       = '#0f0f1a'
-BG_MAT   = '#1a1a2a'
-BG_EMPTY = '#121220'
-BORDER   = '#2a2a3a'
-MUTED    = '#55556a'
-FG       = '#dddde8'
+# ── palette (light) ───────────────────────────────────────────────────────────
+FONT     = 'Segoe UI'
+MONO     = 'Consolas'
 
-C_LOW    = '#1D9E75'
-C_MID    = '#BA7517'
-C_HIGH   = '#D85A30'
-C_EMPTY  = '#1e1e2e'
-
-# ── 3-state colors (net = reading − this channel's zero baseline) ──────────────
-S_EMPTY  = '#E8E8F0'   # white — no pressure (net ≈ 0)
-S_PRESS  = '#FF3B30'   # red   — pressure applied
-S_OTHER  = '#2D7DFF'   # blue  — reserved / in-between (unused for now)
-
-NET_MAX        = 1000  # relative value that fills the bar fully
+BG       = '#F4F5F8'   # window
+CARD     = '#FFFFFF'   # panels
+TILE     = '#F7F8FA'   # a band at rest
+BORDER   = '#E2E5EB'
+GRID     = '#EEF0F4'   # chart gridlines and empty bar tracks
+MUTED    = '#8A90A2'
+FG       = '#1C1F2E'
+ACCENT   = '#2F6FEB'
+BAR      = '#C5CBD8'   # raw-level bar under each band
+OK_COL   = '#2F9E5B'
+WARN_COL = '#C27C0E'
+ERR_COL  = '#E5484D'
+C_EMPTY  = '#EEF0F4'   # placeholder tile for a mat with no data
 
 # ── slope direction display ───────────────────────────────────────────────────
 # Rate of change sidesteps every baseline problem in band_state_detection.md: it
@@ -85,8 +83,8 @@ NET_MAX        = 1000  # relative value that fills the bar fully
 SLOPE_N        = 30    # samples in the slope window (~1.0 s at 30 fps)
 SLOPE_DEADBAND = 170   # counts/s below this reads as flat — sits above the noise
 SLOPE_FULL     = 1200  # counts/s at which the tint reaches full intensity
-SLOPE_UP       = '#FF3B30'   # red   — value rising
-SLOPE_DOWN     = '#22C55E'   # green — value falling
+SLOPE_UP       = '#E5484D'   # red   — value rising
+SLOPE_DOWN     = '#2F9E5B'   # green — value falling
 
 # ── weight-shift arrow (one mat) ──────────────────────────────────────────────
 # Slope says how things are *changing*, not where they *are*, so the arrow is a
@@ -105,8 +103,7 @@ ARROW_FULL  = 2400  # counts/s that reaches the edge of the circle
 RECORD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           'recordings')
 RECORD_HZ  = 100    # matches what the mats actually emit
-REC_ON     = '#FF3B30'
-REC_OFF    = '#3a3a4a'
+REC_ON     = '#E5484D'
 
 # ── empty/pressed state machine ───────────────────────────────────────────────
 # Each channel starts EMPTY. A sudden jump UP flips it to PRESSED; a sudden drop
@@ -121,49 +118,68 @@ RELEASE_LEVEL = 80     # net back within this of the frozen floor → PRESSED �
 DRIFT_ALPHA   = 0.30   # baseline drift-tracking speed while EMPTY
 
 
-# ── band canvas ───────────────────────────────────────────────────────────────
+# ── drawing helpers ───────────────────────────────────────────────────────────
+
+def _blend(a, b, t):
+    """Mix hex colour `a` toward `b` by `t` (0..1)."""
+    a = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return '#' + ''.join(f'{round(x + (y - x) * t):02x}' for x, y in zip(a, b))
+
+
+def _rr_points(x1, y1, x2, y2, r):
+    """Polygon points for a rounded rectangle; draw with smooth=True."""
+    r = max(0.0, min(r, (x2 - x1) / 2, (y2 - y1) / 2))
+    return [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r,
+            x2, y2 - r, x2, y2, x2 - r, y2, x1 + r, y2,
+            x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
+
+
+# ── band tile ─────────────────────────────────────────────────────────────────
 
 class BandCanvas(tk.Canvas):
-    # natural size — also the minimum before text/bar would overlap. The widget
-    # grows past this to fill its grid cell; all geometry is recomputed from the
-    # live canvas size in _layout() so it stays proportional when the window resizes.
-    W, H = 106, 84
+    # natural size — the tile grows to fill its grid cell, and every item is
+    # re-laid out from the live size in _layout() so it stays proportional
+    W, H = 96, 64
 
     def __init__(self, parent, ch_num):
-        super().__init__(parent, width=self.W, height=self.H,
-                         bg=BG_MAT, highlightthickness=1,
-                         highlightbackground=BORDER)
+        super().__init__(parent, width=self.W, height=self.H, bg=CARD,
+                         highlightthickness=0, bd=0)
         self._ch   = ch_num
         self._val  = 0
         self._hist = collections.deque(maxlen=SLOPE_N)
-        self._bg   = BG_MAT
+        self._tint = TILE
         self._slope_val = 0.0
 
         # items are created once; positions/fonts are (re)set in _layout()
-        self._ch_id  = self.create_text(0, 0, anchor='w', text=f'ch {ch_num}',
-                                         fill=MUTED, font=('Courier', 9))
-        self._val_id = self.create_text(0, 0, anchor='w', text='—',
-                                         fill=FG, font=('Courier', 17, 'bold'))
+        self._tile     = self.create_polygon(0, 0, 0, 0, smooth=True,
+                                             fill=TILE, outline=BORDER)
+        self._ch_id    = self.create_text(0, 0, anchor='w', text=f'ch {ch_num}',
+                                          fill=MUTED, font=(FONT, 9))
         self._slope_id = self.create_text(0, 0, anchor='e', text='',
-                                          fill=MUTED, font=('Courier', 9))
-        self._track  = self.create_rectangle(0, 0, 0, 0, fill=BORDER, outline='')
-        self._bar    = self.create_rectangle(0, 0, 0, 0, fill=C_LOW, outline='')
+                                          fill=MUTED, font=(MONO, 9))
+        self._val_id   = self.create_text(0, 0, anchor='w', text='—',
+                                          fill=FG, font=(MONO, 16, 'bold'))
+        self._track    = self.create_rectangle(0, 0, 0, 0, fill=GRID, outline='')
+        self._bar      = self.create_rectangle(0, 0, 0, 0, fill=BAR, outline='')
 
-        self._geom = (10, 70, 74, self.W)   # (pad, bar_y1, bar_y2, w) until first Configure
+        self._geom = (10, 50, 53, self.W)   # (pad, bar_y1, bar_y2, w) until first Configure
         self.bind('<Configure>', lambda e: self._layout(e.width, e.height))
 
     def _layout(self, w, h):
         """Recompute item positions and font sizes for the current canvas size."""
-        pad    = max(6, int(w * 0.09))
-        v_font = max(11, int(h * 0.22))
-        c_font = max(8, int(h * 0.13))
-        self.itemconfig(self._val_id, font=('Courier', v_font, 'bold'))
-        self.itemconfig(self._ch_id,  font=('Courier', c_font))
-        self.itemconfig(self._slope_id, font=('Courier', c_font))
-        self.coords(self._ch_id,  pad, int(h * 0.17))
-        self.coords(self._slope_id, w - pad, int(h * 0.17))
-        self.coords(self._val_id, pad, int(h * 0.52))
-        bar_y1, bar_y2 = int(h * 0.82), int(h * 0.88)
+        pad    = max(8, int(w * 0.09))
+        v_font = max(11, min(28, int(h * 0.26)))
+        c_font = max(8, min(11, int(h * 0.13)))
+        self.coords(self._tile, *_rr_points(1, 1, w - 1, h - 1, min(12, h * 0.16)))
+        self.itemconfig(self._val_id, font=(MONO, v_font, 'bold'))
+        self.itemconfig(self._ch_id, font=(FONT, c_font))
+        self.itemconfig(self._slope_id, font=(MONO, c_font))
+        self.coords(self._ch_id, pad, int(h * 0.20))
+        self.coords(self._slope_id, w - pad, int(h * 0.20))
+        self.coords(self._val_id, pad, int(h * 0.54))
+        bar_y1 = int(h * 0.80)
+        bar_y2 = bar_y1 + 3
         self.coords(self._track, pad, bar_y1, w - pad, bar_y2)
         self._geom = (pad, bar_y1, bar_y2, w)
         self._draw_bar()
@@ -207,18 +223,20 @@ class BandCanvas(tk.Canvas):
     def _apply_slope(self):
         s = self._slope_val = self._compute_slope()
         if abs(s) < SLOPE_DEADBAND:
-            col, bg, txt = FG, BG_MAT, ''
+            tint, edge, ink, txt = TILE, BORDER, FG, ''
         else:
             col = SLOPE_UP if s > 0 else SLOPE_DOWN
             # intensity tracks |slope|, so bands changing at the same rate look
             # alike — comparing rates across bands is the whole point of the view
-            bg  = _hex_shade(col, 0.12 + 0.30 * min(1.0, abs(s) / SLOPE_FULL))
-            txt = f'{s:+.0f}/s'
-        self.itemconfig(self._val_id, fill=col)
-        self.itemconfig(self._slope_id, text=txt, fill=col)
-        if bg != self._bg:                  # reconfigure only on a real change
-            self._bg = bg
-            self.config(bg=bg)
+            tint = _blend(TILE, col, 0.10 + 0.28 * min(1.0, abs(s) / SLOPE_FULL))
+            edge = _blend(TILE, col, 0.45)
+            ink  = _blend(col, '#000000', 0.25)
+            txt  = f'{s:+.0f}/s'
+        self.itemconfig(self._val_id, fill=ink)
+        self.itemconfig(self._slope_id, text=txt, fill=ink)
+        if tint != self._tint:                  # reconfigure only on a real change
+            self._tint = tint
+            self.itemconfig(self._tile, fill=tint, outline=edge)
 
     def rezero(self):
         """Forget the slope window so the colours restart from flat."""
@@ -239,40 +257,40 @@ class ArrowCross(tk.Canvas):
     Direction is exact; the length is a rate, not a distance.
     """
 
-    W, H = 176, 200
+    W, H = 176, 176
     DIRS = ['right', 'front-right', 'front', 'front-left',
             'left', 'back-left', 'back', 'back-right']
 
     def __init__(self, parent):
-        super().__init__(parent, width=self.W, height=self.H, bg=BG_MAT,
-                         highlightthickness=1, highlightbackground=BORDER)
-        self._ring  = self.create_oval(0, 0, 0, 0, outline=BORDER)
+        super().__init__(parent, width=self.W, height=self.H, bg=CARD,
+                         highlightthickness=0, bd=0)
+        self._ring  = self.create_oval(0, 0, 0, 0, outline=BORDER, width=1.5,
+                                       fill=TILE)
         self._ax_h  = self.create_line(0, 0, 0, 0, fill=BORDER)
         self._ax_v  = self.create_line(0, 0, 0, 0, fill=BORDER)
-        self._arrow = self.create_line(0, 0, 0, 0, fill=S_OTHER, width=3,
-                                       arrow='last', arrowshape=(11, 13, 5))
+        self._arrow = self.create_line(0, 0, 0, 0, fill=ACCENT, width=4,
+                                       arrow='last', arrowshape=(12, 14, 6),
+                                       capstyle='round')
         self._hub   = self.create_oval(0, 0, 0, 0, fill=MUTED, outline='')
         self._edges = {k: self.create_text(0, 0, text=k, fill=MUTED,
-                                           font=('Courier', 8))
+                                           font=(FONT, 8, 'bold'))
                        for k in ('F', 'B', 'L', 'R')}
-        self._read  = self.create_text(0, 0, anchor='s', text='still',
-                                       fill=MUTED, font=('Courier', 9))
+        self.reading = None          # (direction, counts/s), or None when still
         self.itemconfigure(self._arrow, state='hidden')
         self._geom = (self.W / 2, self.H / 2, 60)
         self.bind('<Configure>', lambda e: self._layout(e.width, e.height))
 
     def _layout(self, w, h):
-        cx, cy = w / 2, (h - 16) / 2
-        r = max(20, min(w, h - 16) / 2 - 16)
+        cx, cy = w / 2, h / 2
+        r = max(20, min(w, h) / 2 - 16)
         self.coords(self._ring, cx - r, cy - r, cx + r, cy + r)
         self.coords(self._ax_h, cx - r, cy, cx + r, cy)
         self.coords(self._ax_v, cx, cy - r, cx, cy + r)
-        self.coords(self._hub, cx - 2, cy - 2, cx + 2, cy + 2)
-        self.coords(self._edges['F'], cx, cy - r - 7)
-        self.coords(self._edges['B'], cx, cy + r + 7)
+        self.coords(self._hub, cx - 3, cy - 3, cx + 3, cy + 3)
+        self.coords(self._edges['F'], cx, cy - r - 8)
+        self.coords(self._edges['B'], cx, cy + r + 8)
         self.coords(self._edges['L'], cx - r - 9, cy)
         self.coords(self._edges['R'], cx + r + 9, cy)
-        self.coords(self._read, w / 2, h - 4)
         self._geom = (cx, cy, r)
         self._place()
 
@@ -288,68 +306,58 @@ class ArrowCross(tk.Canvas):
         mag = (vx * vx + vy * vy) ** 0.5
         if mag < ARROW_MIN:            # nothing moving faster than the noise
             self.itemconfigure(self._arrow, state='hidden')
-            self.itemconfig(self._read, text='still', fill=MUTED)
+            self.reading = None
             return
         frac = min(1.0, mag / ARROW_FULL)
         # screen y grows downward, so the front of the mat is -y
         self.coords(self._arrow, cx, cy,
                     cx + r * frac * vx / mag, cy - r * frac * vy / mag)
         self.itemconfigure(self._arrow, state='normal')
-        name = self.DIRS[int(round(math.atan2(vy, vx) / (math.pi / 4))) % 8]
-        self.itemconfig(self._read, text=f'{name}  {mag:.0f}/s', fill=FG)
+        self.reading = (self.DIRS[int(round(math.atan2(vy, vx)
+                                            / (math.pi / 4))) % 8], mag)
 
 
-
-def _hex_shade(hex_col, factor):
-    """Darken hex_col by scaling each channel toward black by `factor` (0..1)."""
-    r = int(int(hex_col[1:3], 16) * factor)
-    g = int(int(hex_col[3:5], 16) * factor)
-    b = int(int(hex_col[5:7], 16) * factor)
-    return f'#{r:02x}{g:02x}{b:02x}'
-
-
-# ── mat widget ────────────────────────────────────────────────────────────────
+# ── mat card ──────────────────────────────────────────────────────────────────
 
 class MatWidget(tk.Frame):
-    GAP = 6
+    """One mat as a card: its name, its channels, and the 2×2 band grid."""
+    GAP = 8
 
-    def __init__(self, parent, label, channels, empty=False):
-        super().__init__(parent, bg=BG)
+    def __init__(self, parent, label, channels, empty=False, badge=None):
+        super().__init__(parent, bg=CARD, highlightthickness=1,
+                         highlightbackground=BORDER, padx=12, pady=10)
         self._bands = {}
         self._channels = tuple(channels)
 
-        tk.Label(self, text=label, bg=BG, fg=MUTED,
-                 font=('Arial', 9)).pack(anchor='w', pady=(0, 4))
+        head = tk.Frame(self, bg=CARD)
+        head.pack(fill='x', pady=(0, 6))
+        tk.Label(head, text=label, bg=CARD, fg=FG,
+                 font=(FONT, 10, 'bold')).pack(side='left')
+        tk.Label(head, text='ch ' + ' · '.join(str(c) for c in sorted(channels)),
+                 bg=CARD, fg=MUTED, font=(FONT, 8)).pack(side='left', padx=(8, 0))
+        if badge:
+            tk.Label(head, text=badge, bg=_blend(CARD, ACCENT, 0.12), fg=ACCENT,
+                     font=(FONT, 8, 'bold'), padx=7, pady=1).pack(side='right')
 
-        shell = tk.Frame(self, bg=BORDER, padx=1, pady=1)
-        shell.pack(fill='both', expand=True)
-
-        inner = tk.Frame(shell, bg=BG_EMPTY if empty else BG_MAT,
-                         padx=self.GAP, pady=self.GAP)
-        inner.pack(fill='both', expand=True)
-
-        # the 2×2 grid shares space evenly, so every band grows with the window
+        grid = tk.Frame(self, bg=CARD)
+        grid.pack(fill='both', expand=True)
         for i in range(2):
-            inner.rowconfigure(i, weight=1, uniform='band')
-            inner.columnconfigure(i, weight=1, uniform='band')
+            grid.rowconfigure(i, weight=1, uniform='band')
+            grid.columnconfigure(i, weight=1, uniform='band')
 
         for row in range(2):
             for col in range(2):
                 ch = channels[row * 2 + col]
-                pad = (0 if col == 0 else self.GAP, 0), (0 if row == 0 else self.GAP, 0)
                 if empty:
-                    ph = tk.Frame(inner, width=BandCanvas.W, height=BandCanvas.H,
-                                  bg=C_EMPTY, highlightthickness=1,
-                                  highlightbackground='#22223a')
-                    ph.grid(row=row, column=col, sticky='nsew',
-                            padx=pad[0], pady=pad[1])
-                    ph.pack_propagate(False)
+                    cell = tk.Frame(grid, width=BandCanvas.W,
+                                    height=BandCanvas.H, bg=C_EMPTY)
                 else:
-                    band = BandCanvas(inner, ch)
-                    band.grid(row=row, column=col, sticky='nsew',
-                              padx=pad[0], pady=pad[1])
-                    self._bands[ch] = band
-
+                    cell = BandCanvas(grid, ch)
+                    self._bands[ch] = cell
+                # identical padding on every cell, so the four tiles come out the
+                # same size — uneven padding shrinks some tiles within equal rows
+                cell.grid(row=row, column=col, sticky='nsew',
+                          padx=self.GAP // 2, pady=self.GAP // 2)
 
     def update(self, ch, val):
         if ch in self._bands:
@@ -487,13 +495,14 @@ class DemoDriver:
 CHART_CHANNELS = list(range(12))   # plot every channel (all 3 mats)
 CHART_HISTORY  = 300    # samples kept on screen (~10 s at 30 fps)
 CHART_W        = 680
-CHART_H        = 460
-ALIGN_H        = 300    # height of the baseline-aligned chart beneath the raw one
+CHART_H        = 380
+ALIGN_H        = 260    # height of the baseline-aligned chart beneath the raw one
 ALIGN_FLOOR    = 200    # min top-of-scale so a flat (all-rest) view isn't all noise
+# one hue family per mat, so a line's colour says which mat it came from
 CHART_COLORS   = [
-    '#FF5252', '#FF9800', '#FFD740', '#C6FF00',   # ch 0-3
-    '#69F0AE', '#1DE9B6', '#40C4FF', '#448AFF',   # ch 4-7
-    '#7C4DFF', '#E040FB', '#FF4081', '#BCAAA4',   # ch 8-11
+    '#1F6FB2', '#4C9BE0', '#0B4A80', '#7DB6EA',   # Mat 1 — ch 0-3
+    '#D9480F', '#F08C3A', '#9C3208', '#F4A96B',   # Mat 2 — ch 4-7
+    '#2B8A3E', '#52B766', '#18612A', '#8BCF99',   # Mat 3 — ch 8-11
 ]
 
 
@@ -506,7 +515,7 @@ class RawChart:
     as long as it is held (it doesn't decay), which is what makes a per-band press
     obvious. Press `r` to re-capture the initial balance for every channel.
     """
-    PAD_L, PAD_R, PAD_T, PAD_B = 52, 12, 14, 22
+    PAD_L, PAD_R, PAD_T, PAD_B = 48, 10, 26, 16
 
     def __init__(self, parent, channels, zeroed=False, height=CHART_H):
         self._channels = channels
@@ -516,8 +525,7 @@ class RawChart:
         # the width/height here are only initial hints; fill+expand lets the
         # canvas track its parent, and redraw() reads the live size each frame
         self.cv = tk.Canvas(parent, width=CHART_W, height=height,
-                            bg=BG_MAT, highlightthickness=1,
-                            highlightbackground=BORDER)
+                            bg=CARD, highlightthickness=0, bd=0)
         self.cv.pack(fill='both', expand=True)
 
     def push(self, data):
@@ -540,6 +548,21 @@ class RawChart:
         for h in self._hist.values():
             h.clear()
 
+    def _legend(self, x):
+        """One row across the top: mat name, then a swatch per channel."""
+        cv, y = self.cv, 9
+        for m, chans in enumerate(MAT_CHANNELS):
+            t = cv.create_text(x, y, anchor='w', text=MAT_LABELS[m], fill=MUTED,
+                               font=(FONT, 8, 'bold'))
+            x = cv.bbox(t)[2] + 8        # measured, so it holds at any DPI
+            for ch in sorted(chans):
+                cv.create_rectangle(x, y - 4, x + 8, y + 4, outline='',
+                                    fill=CHART_COLORS[ch % len(CHART_COLORS)])
+                t = cv.create_text(x + 12, y, anchor='w', text=str(ch), fill=FG,
+                                   font=(MONO, 8))
+                x = cv.bbox(t)[2] + 10
+            x += 14
+
     def redraw(self):
         cv = self.cv
         w, h = cv.winfo_width(), cv.winfo_height()
@@ -548,6 +571,7 @@ class RawChart:
         cv.delete('all')
         x0, y0 = self.PAD_L, self.PAD_T
         x1, y1 = w - self.PAD_R, h - self.PAD_B
+        self._legend(x0)
 
         allvals = [v for ch in self._channels for v in self._hist[ch]]
         if not allvals:
@@ -569,31 +593,26 @@ class RawChart:
         # horizontal grid + y-axis labels (auto-scaled to the visible data)
         for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
             yy = y1 - (y1 - y0) * frac
-            cv.create_line(x0, yy, x1, yy, fill=BORDER)
+            cv.create_line(x0, yy, x1, yy, fill=GRID)
             cv.create_text(x0 - 6, yy, anchor='e', fill=MUTED,
-                           font=('Courier', 8), text=f'{vmin + span * frac:.0f}')
+                           font=(MONO, 8), text=f'{vmin + span * frac:.0f}')
 
-        # brighter zero line: this is the resting level, so anything above it is
+        # darker zero line: this is the resting level, so anything above it is
         # pressure on that band — the whole point of the aligned view
         if self._zeroed and vmin < 0 < vmax:
             yz = y1 - (y1 - y0) * ((0 - vmin) / span)
-            cv.create_line(x0, yz, x1, yz, fill=MUTED, width=1)
+            cv.create_line(x0, yz, x1, yz, fill=_blend(BORDER, '#000000', 0.2))
 
-        # one polyline per channel + legend with current raw value
-        for i, ch in enumerate(self._channels):
-            h = self._hist[ch]
-            col = CHART_COLORS[i % len(CHART_COLORS)]
-            cur = h[-1] if h else '—'
-            cv.create_text(x1, y0 + 2 + i * 14, anchor='ne', fill=col,
-                           font=('Courier', 9), text=f'ch {ch}: {cur}')
-            if len(h) < 2:
+        for ch in self._channels:
+            hist = self._hist[ch]
+            if len(hist) < 2:
                 continue
             pts = []
-            for j, v in enumerate(h):
-                xx = x0 + (x1 - x0) * (j / (CHART_HISTORY - 1))
-                yy = y1 - (y1 - y0) * ((v - vmin) / span)
-                pts += [xx, yy]
-            cv.create_line(*pts, fill=col, width=1.5)
+            for j, v in enumerate(hist):
+                pts += [x0 + (x1 - x0) * (j / (CHART_HISTORY - 1)),
+                        y1 - (y1 - y0) * ((v - vmin) / span)]
+            cv.create_line(*pts, fill=CHART_COLORS[ch % len(CHART_COLORS)],
+                           width=1.4)
 
 
 # ── main app ──────────────────────────────────────────────────────────────────
@@ -608,7 +627,7 @@ class App:
         root.title('Yoga Mat Monitor')
         root.configure(bg=BG)
         root.resizable(True, True)
-        root.minsize(860, 660)          # below this the bands/charts would overlap
+        root.minsize(960, 700)          # below this the bands/charts would overlap
 
         self._build_ui()
 
@@ -630,12 +649,10 @@ class App:
         self._poll()
 
     def _build_ui(self):
-        # status bar first so it keeps its slice when the body expands
-        self._status = tk.Label(self.root, text='', bg='#0a0a12',
-                                 fg=MUTED, font=('Arial', 8), anchor='w', padx=8)
-        self._status.pack(fill='x', side='bottom')
+        # header and record bar are packed before the body so they keep their
+        # slices when the body expands
+        self._build_header()
         self._build_record_bar()
-
 
         body = tk.Frame(self.root, bg=BG)
         body.pack(fill='both', expand=True)
@@ -643,95 +660,155 @@ class App:
         body.columnconfigure(0, weight=1)   # mats
         body.columnconfigure(1, weight=2)   # charts get the larger share
 
-        # left column: the mats, sharing the vertical space evenly
-        left = tk.Frame(body, bg=BG, padx=24, pady=20)
-        left.grid(row=0, column=0, sticky='nsew')
-
+        # left: the three mats, locked to identical heights. `uniform` makes the
+        # rows equal whatever their content wants, and every card gets the same
+        # padding so the cards themselves — not just the rows — match.
+        left = tk.Frame(body, bg=BG)
+        left.grid(row=0, column=0, sticky='nsew', padx=(14, 7), pady=9)
+        left.columnconfigure(0, weight=1)
         self._mats = []
         for i, (label, channels) in enumerate(zip(MAT_LABELS, MAT_CHANNELS)):
-            if i > 0:
-                sep = tk.Frame(left, bg=BG, height=20)
-                sep.pack(fill='x')
-                tk.Frame(sep, bg=BORDER, height=1).place(
-                    relx=0.05, rely=0.5, relwidth=0.9)
-
-            mat = MatWidget(left, label, channels)
-            mat.pack(fill='both', expand=True)
+            left.rowconfigure(i, weight=1, uniform='mat')
+            mat = MatWidget(left, label, channels,
+                            badge='in use' if i == ARROW_MAT else None)
+            mat.grid(row=i, column=0, sticky='nsew', pady=5)
             self._mats.append(mat)
 
-        # right column: raw chart on top, baseline-aligned chart beneath it,
-        # both stretching to fill the height (raw a bit taller than aligned)
-        right = tk.Frame(body, bg=BG, padx=12, pady=20)
-        right.grid(row=0, column=1, sticky='nsew')
+        # right: the arrow, then the raw chart, then the aligned chart
+        right = tk.Frame(body, bg=BG)
+        right.grid(row=0, column=1, sticky='nsew', padx=(7, 14), pady=9)
         right.columnconfigure(0, weight=1)
-        right.rowconfigure(3, weight=3)     # raw chart
-        right.rowconfigure(5, weight=2)     # aligned chart
+        right.rowconfigure(1, weight=3)     # raw chart
+        right.rowconfigure(2, weight=2)     # aligned chart
 
-        # which way weight is moving on the mat in use — direction only, and
-        # blank while the mat is still (see ArrowCross)
-        tk.Label(right, text=f'{MAT_LABELS[ARROW_MAT]} — which way weight is '
-                             f'moving now',
-                 bg=BG, fg=MUTED, font=('Arial', 9)).grid(row=0, column=0, sticky='w')
-        cross_frame = tk.Frame(right, bg=BG)
-        cross_frame.grid(row=1, column=0, sticky='w', pady=(2, 0))
-        self._cross = ArrowCross(cross_frame)
-        self._cross.pack()
+        arrow = self._card(right, f'Weight shift · {MAT_LABELS[ARROW_MAT]}',
+                           'direction of movement — blank while still')
+        arrow.grid(row=0, column=0, sticky='ew', pady=5)
+        self._cross = ArrowCross(arrow.body)
+        self._cross.pack(side='left')
+        # the readout is big on purpose: it has to be legible from on the mat
+        readout = tk.Frame(arrow.body, bg=CARD)
+        readout.pack(side='left', fill='y', padx=(28, 0))
+        tk.Frame(readout, bg=CARD).pack(expand=True, fill='both')
+        self._dir_lbl = tk.Label(readout, text='still', bg=CARD, fg=MUTED,
+                                 font=(FONT, 28, 'bold'), anchor='w')
+        self._dir_lbl.pack(anchor='w')
+        self._rate_lbl = tk.Label(readout, text='nothing moving above the noise',
+                                  bg=CARD, fg=MUTED, font=(FONT, 10), anchor='w')
+        self._rate_lbl.pack(anchor='w')
+        tk.Frame(readout, bg=CARD).pack(expand=True, fill='both')
+        self._shown = None
 
-        tk.Label(right, text='Raw signal — all 12 channels',
-                 bg=BG, fg=MUTED, font=('Arial', 9)).grid(row=2, column=0,
-                                                          sticky='w', pady=(12, 4))
-        raw_frame = tk.Frame(right, bg=BG)
-        raw_frame.grid(row=3, column=0, sticky='nsew')
-        self._chart = RawChart(raw_frame, CHART_CHANNELS)
+        raw = self._card(right, 'Raw signal', 'all 12 channels')
+        raw.grid(row=1, column=0, sticky='nsew', pady=5)
+        self._chart = RawChart(raw.body, CHART_CHANNELS)
 
-        # baseline-aligned view directly under the raw chart: every channel
-        # zeroed to its resting level so presses stand out on a common scale
-        tk.Label(right, text='Raw − initial balance — press pops above 0  (r: re-zero)',
-                 bg=BG, fg=MUTED, font=('Arial', 9)).grid(row=4, column=0,
-                                                          sticky='w', pady=(12, 4))
-        align_frame = tk.Frame(right, bg=BG)
-        align_frame.grid(row=5, column=0, sticky='nsew')
-        self._align = RawChart(align_frame, CHART_CHANNELS, zeroed=True, height=ALIGN_H)
+        aligned = self._card(right, 'Raw − initial balance',
+                             'a press pops above 0  ·  r to re-zero')
+        aligned.grid(row=2, column=0, sticky='nsew', pady=5)
+        self._align = RawChart(aligned.body, CHART_CHANNELS, zeroed=True,
+                               height=ALIGN_H)
+
+    def _card(self, parent, title, subtitle=''):
+        """A white panel with a title row; put content in `.body`."""
+        card = tk.Frame(parent, bg=CARD, highlightthickness=1,
+                        highlightbackground=BORDER, padx=12, pady=10)
+        head = tk.Frame(card, bg=CARD)
+        head.pack(fill='x', pady=(0, 6))
+        tk.Label(head, text=title, bg=CARD, fg=FG,
+                 font=(FONT, 10, 'bold')).pack(side='left')
+        if subtitle:
+            tk.Label(head, text=subtitle, bg=CARD, fg=MUTED,
+                     font=(FONT, 8)).pack(side='left', padx=(8, 0))
+        card.body = tk.Frame(card, bg=CARD)
+        card.body.pack(fill='both', expand=True)
+        return card
+
+    def _build_header(self):
+        """App name on the left, one status pill per port on the right."""
+        head = tk.Frame(self.root, bg=CARD)
+        head.pack(fill='x', side='top')
+        tk.Frame(self.root, bg=BORDER, height=1).pack(fill='x', side='top')
+        tk.Label(head, text='Yoga Mat Monitor', bg=CARD, fg=FG,
+                 font=(FONT, 12, 'bold')).pack(side='left', padx=16, pady=10)
+        pills = tk.Frame(head, bg=CARD)
+        pills.pack(side='right', padx=10)
+        self._pills, self._pill_state = {}, {}
+        for name in (['demo'] if self._demo else PORTS):
+            self._pills[name] = tk.Label(pills, text='', bg=CARD, fg=MUTED,
+                                         font=(FONT, 9), padx=8)
+            self._pills[name].pack(side='left')
+
+    def _set_pill(self, name, text, colour):
+        if self._pill_state.get(name) != (text, colour):   # skip no-op reconfigures
+            self._pill_state[name] = (text, colour)
+            self._pills[name].config(text='\u25cf ' + text, fg=colour)
 
     def _build_record_bar(self):
-        """Subject, label, and start/stop — sits above the status bar."""
-        bar = tk.Frame(self.root, bg='#12121e', padx=10, pady=7)
+        """Session fields and controls, pinned to the bottom of the window."""
+        bar = tk.Frame(self.root, bg=CARD, padx=16, pady=10)
         bar.pack(fill='x', side='bottom')
+        tk.Frame(self.root, bg=BORDER, height=1).pack(fill='x', side='bottom')
 
-        def label(text):
-            tk.Label(bar, text=text, bg='#12121e', fg=MUTED,
-                     font=('Arial', 8)).pack(side='left', padx=(0, 4))
+        def field(title, width):
+            col = tk.Frame(bar, bg=CARD)
+            col.pack(side='left', padx=(0, 12))
+            tk.Label(col, text=title.upper(), bg=CARD, fg=MUTED,
+                     font=(FONT, 7, 'bold')).pack(anchor='w')
+            # tk.Entry has no inner padding, so a wrapper frame carries the
+            # border and the entry sits inside it with room either side
+            wrap = tk.Frame(col, bg=TILE, highlightthickness=1,
+                            highlightbackground=BORDER, highlightcolor=BORDER)
+            wrap.pack(anchor='w')
+            entry = tk.Entry(wrap, width=width, bg=TILE, fg=FG,
+                             insertbackground=FG, relief='flat', bd=0,
+                             highlightthickness=0, font=(FONT, 10))
+            entry.pack(padx=8, pady=5)
+            entry.bind('<FocusIn>',
+                       lambda e: wrap.config(highlightbackground=ACCENT))
+            entry.bind('<FocusOut>',
+                       lambda e: wrap.config(highlightbackground=BORDER))
+            # Enter commits the field and hands the keyboard back to the hotkeys
+            entry.bind('<Return>', lambda e: self.root.focus_set())
+            return entry
 
-        def entry(width, default=''):
-            e = tk.Entry(bar, width=width, bg=BG_MAT, fg=FG, insertbackground=FG,
-                         relief='flat', highlightthickness=1,
-                         highlightbackground=BORDER, highlightcolor=S_OTHER,
-                         font=('Arial', 9))
-            e.insert(0, default)
-            e.pack(side='left', padx=(0, 14))
-            return e
+        self._subject = field('subject', 12)
+        self._pose    = field('pose', 16)
+        self._label   = field('label', 18)
+        # Enter in the label box drops the mark straight away
+        self._label.bind('<Return>', lambda e: (self._mark(),
+                                                self.root.focus_set()))
 
-        label('subject')
-        self._subject = entry(14)
-        label('label')
-        self._label = entry(18)
-
-        self._rec_btn = tk.Button(bar, text='\u25cf  Record', width=11,
-                                  bg=REC_OFF, fg=FG, activebackground=REC_ON,
-                                  activeforeground=FG, relief='flat',
-                                  font=('Arial', 9, 'bold'), cursor='hand2',
-                                  command=self._toggle_record)
+        btns = tk.Frame(bar, bg=CARD)
+        btns.pack(side='left', padx=(4, 14), pady=(15, 0))
+        self._rec_btn = tk.Button(
+            btns, text='\u25cf  Record', width=10, relief='flat', bd=0,
+            font=(FONT, 10, 'bold'), cursor='hand2', padx=8, pady=3,
+            command=self._toggle_record)
         self._rec_btn.pack(side='left', padx=(0, 8))
+        self._style_record_btn(False)
 
-        self._mark_btn = tk.Button(bar, text='Mark  (m)', width=10,
-                                   bg=REC_OFF, fg=MUTED, relief='flat',
-                                   font=('Arial', 9), cursor='hand2',
-                                   command=self._mark, state='disabled')
-        self._mark_btn.pack(side='left', padx=(0, 14))
+        self._mark_btn = tk.Button(
+            btns, text='Mark  (m)', width=10, relief='flat', bd=0,
+            bg=GRID, fg=FG, activebackground=BORDER, activeforeground=FG,
+            disabledforeground=MUTED, font=(FONT, 10), cursor='hand2',
+            padx=8, pady=3, command=self._mark, state='disabled')
+        self._mark_btn.pack(side='left')
 
-        self._rec_status = tk.Label(bar, text='not recording', bg='#12121e',
-                                    fg=MUTED, font=('Courier', 9), anchor='w')
-        self._rec_status.pack(side='left', fill='x', expand=True)
+        self._rec_status = tk.Label(bar, text='not recording', bg=CARD,
+                                    fg=MUTED, font=(FONT, 9), anchor='w')
+        self._rec_status.pack(side='left', fill='x', expand=True, pady=(15, 0))
+
+    def _style_record_btn(self, recording):
+        if recording:
+            self._rec_btn.config(text='\u25a0  Stop', bg=REC_ON, fg='#FFFFFF',
+                                 activebackground=_blend(REC_ON, '#000000', 0.12),
+                                 activeforeground='#FFFFFF')
+        else:
+            self._rec_btn.config(text='\u25cf  Record',
+                                 bg=_blend(CARD, REC_ON, 0.12), fg=REC_ON,
+                                 activebackground=_blend(CARD, REC_ON, 0.22),
+                                 activeforeground=REC_ON)
 
     def _typing(self):
         """True while a text box has focus, so hotkeys do not steal keystrokes."""
@@ -740,11 +817,11 @@ class App:
     def _toggle_record(self):
         if self._recorder.active:
             meta = self._recorder.stop(self._port_stats())
-            self._rec_btn.config(text='\u25cf  Record', bg=REC_OFF)
-            self._mark_btn.config(state='disabled', fg=MUTED)
+            self._style_record_btn(False)
+            self._mark_btn.config(state='disabled')
             self._rec_status.config(
-                text=f"saved {os.path.basename(self._recorder.path)}  "
-                     f"({meta['rows']} rows, {meta['events']} marks)", fg=FG)
+                text=f"saved {os.path.basename(self._recorder.path)}  \u00b7  "
+                     f"{meta['rows']:,} rows, {meta['events']} marks", fg=FG)
         else:
             subject = self._subject.get().strip() or 'session'
             path = self._recorder.start(RECORD_DIR, subject, meta={
@@ -754,16 +831,20 @@ class App:
                 'baud': BAUD,
                 'demo': self._demo,
             })
-            self._rec_btn.config(text='\u25a0  Stop', bg=REC_ON)
-            self._mark_btn.config(state='normal', fg=FG)
+            self._style_record_btn(True)
+            self._mark_btn.config(state='normal')
             self._rec_status.config(text=f'recording to {os.path.basename(path)}')
         self.root.focus_set()
 
     def _mark(self):
-        text = self._label.get().strip() or 'mark'
-        if self._recorder.mark(text):
-            self._rec_status.config(text=f"marked '{text}' at "
-                                         f"{self._recorder.elapsed:6.1f}s")
+        pose = self._pose.get().strip()
+        label = self._label.get().strip()
+        if not pose and not label:
+            label = 'mark'
+        if self._recorder.mark(label, pose):
+            what = ' / '.join(x for x in (pose, label) if x)
+            self._rec_status.config(
+                text=f'marked {what} at {self._recorder.elapsed:.1f}s', fg=FG)
 
     def _port_stats(self):
         return {r.port: {'frames': r.frames, 'bad_checksum': r.bad,
@@ -780,6 +861,16 @@ class App:
                     mat.update(ch, self._data[ch])
 
         self._cross.update_vector(self._mats[ARROW_MAT].slopes())
+        reading = self._cross.reading
+        shown = None if reading is None else (reading[0], round(reading[1], -1))
+        if shown != self._shown:                  # skip no-op reconfigures
+            self._shown = shown
+            if shown is None:
+                self._dir_lbl.config(text='still', fg=MUTED)
+                self._rate_lbl.config(text='nothing moving above the noise')
+            else:
+                self._dir_lbl.config(text=shown[0], fg=ACCENT)
+                self._rate_lbl.config(text=f'{shown[1]:,.0f} counts/s', fg=FG)
 
         self._chart.push(self._data)
         self._chart.redraw()
@@ -794,11 +885,18 @@ class App:
                      f'{self._recorder.rows:,} rows', fg=REC_ON)
 
         if self._demo:
-            self._status.config(text='demo mode  —  pyserial not found or no ports')
+            self._set_pill('demo', 'demo mode — no ports', WARN_COL)
         else:
-            parts = [f'{PORTS[i]}: {r.status} (bad {r.bad})'
-                     for i, r in enumerate(self._readers)]
-            self._status.config(text='    '.join(parts))
+            for r in self._readers:
+                if r.status == 'ok':
+                    text, colour = r.port, OK_COL
+                elif r.status.startswith('connecting'):
+                    text, colour = f'{r.port} connecting', WARN_COL
+                else:
+                    text, colour = f'{r.port} · {r.status[:40]}', ERR_COL
+                if r.bad:
+                    text += f' · {r.bad} bad'
+                self._set_pill(r.port, text, colour)
 
         self.root.after(UPDATE_MS, self._poll)
 
