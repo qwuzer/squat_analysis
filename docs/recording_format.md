@@ -12,9 +12,10 @@ Run `python mat_ui.py`. The bar above the status line has everything:
 | Control | Does |
 | --- | --- |
 | **subject** | names the session and goes in the sidecar |
-| **label** | the text a mark will carry (e.g. `warrior2`) |
+| **pose** | the move being performed (e.g. `tree_L`); stays set between marks |
+| **label** | optional extra text a mark carries (e.g. `wobble`). Enter in this box marks immediately |
 | **● Record** | start / stop |
-| **Mark** or `m` | drop a timestamped label at this instant |
+| **Mark** or `m` | drop a timestamped mark carrying the current pose and label |
 
 `r` still re-zeroes the aligned chart. Both hotkeys are ignored while a text box
 has focus, so typing a label does not trigger them.
@@ -42,7 +43,8 @@ actually wants, and because comparing the two exposes clock problems.
 
 ### `<name>_events.csv` — the labels
 
-`Time`, `elapsed_s`, `label` — one row per mark.
+`Time`, `elapsed_s`, `pose`, `label` — one row per mark. Files recorded before
+the pose field existed have no `pose` column and still merge, with an empty pose.
 
 Labels live **outside** the signal file. In the bicep pipeline `Reps`, `RIR` and
 `actions` are columns bolted onto the signal, which means re-segmenting forces
@@ -69,16 +71,15 @@ Marks are **not** a column in the signal file. To produce one:
 python recorder.py merge recordings/subj_20260917_173508.csv
 ```
 
-That writes `..._labelled.csv` — the same rows plus a `label` column.
+That writes `..._labelled.csv` — the same rows plus `pose` and `label` columns.
 
 A mark applies **from its own timestamp until the next one**, so a held pose is
 the span between two marks. A mark labelled `end` or `-` closes the current span
 without opening a new one.
 
 ```
-  0.011s  label -> ''
-  1.230s  label -> 'warrior2'
-  1.641s  label -> 'tree'
+  0.010s  pose=''        label=''
+  0.620s  pose='tree_L'  label='wobble'
 ```
 
 Storing them apart and joining on demand is deliberate: re-labelling never

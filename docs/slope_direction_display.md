@@ -54,7 +54,7 @@ delta = mean(newest half) − mean(oldest half)
 slope = delta / (samples between the two half-centres × dt)      # counts/s
 ```
 
-With `SLOPE_N = 21` (~0.7 s at 30 fps) each half averages 10 samples, cutting the
+With `SLOPE_N = 30` (~1.0 s at 30 fps) each half averages 15 samples, cutting the
 noise on each term by √10 before they are subtracted. Reported in **counts per
 second**, so the threshold means something physical and is independent of the
 frame rate.
@@ -82,11 +82,11 @@ above the deadband, for when the exact figure is wanted.
 
 | Constant | Default | Meaning |
 | --- | --- | --- |
-| `SLOPE_N` | 21 | samples in the slope window (~0.7 s at 30 fps) |
-| `SLOPE_DEADBAND` | 200 | counts/s below which a band reads flat |
+| `SLOPE_N` | 30 | samples in the slope window (~1.0 s at 30 fps) |
+| `SLOPE_DEADBAND` | 170 | counts/s below which a band reads flat |
 | `SLOPE_FULL` | 1200 | counts/s at which the tint reaches full intensity |
-| `SLOPE_UP` | `#FF3B30` | red — value rising |
-| `SLOPE_DOWN` | `#22C55E` | green — value falling |
+| `SLOPE_UP` | `#E5484D` | red — value rising |
+| `SLOPE_DOWN` | `#2F9E5B` | green — value falling |
 
 `SLOPE_DEADBAND` is the one to adjust against real hardware, and it trades
 directly against `SLOPE_N`:
@@ -164,7 +164,7 @@ the same distinction as `Σ` of the slopes (§2), from the other side.
 | Constant | Default | Meaning |
 | --- | --- | --- |
 | `ARROW_MAT` | 1 | which mat the arrow watches (index into `MAT_CHANNELS`) |
-| `ARROW_MIN` | 500 | counts/s of arrow length below which it reads "still" |
+| `ARROW_MIN` | 200 | counts/s of arrow length below which it reads "still" |
 | `ARROW_FULL` | 2400 | counts/s that reaches the edge of the circle |
 
 Each axis sums four band slopes, so its noise is about **twice** a single band's
