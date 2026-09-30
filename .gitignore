@@ -8,3 +8,6 @@ recordings/
 
 # reference papers, kept locally
 *.pdf
+
+# per-machine operator settings (holds body weights)
+mat_ui_settings.json

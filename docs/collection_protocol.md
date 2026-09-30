@@ -5,11 +5,12 @@
 
 ---
 
-## 1. The six conditions
+## 1. The conditions
 
 | # | Condition | Contact | What it gives us |
 | --- | --- | --- | --- |
 | 1 | **Quiet standing** (Tadasana) | 2 feet, together | The reference. Every score is relative to this |
+| 1b | **Quiet standing, eyes closed** | 2 feet, together | The validity check — see below |
 | 2 | **Tree, left foot** | 1 foot | Maximum load contrast against #1 |
 | 3 | **Tree, right foot** | 1 foot | Bilateral pair with #2 |
 | 4 | **Warrior 2, left forward** | 2 feet, wide | Front/back + left/right asymmetry, spans mats |
@@ -35,6 +36,14 @@ spread a stability score has nothing to discriminate.
 
 **Chair fatigues.** Sway should grow across the hold. That is the only condition
 here that tests the trend-within-a-hold metric.
+
+### Why eyes closed
+
+Removing vision reliably increases sway — it is the standard manipulation in
+posturography, with a large, known effect. If a stability score does **not** rise
+with eyes closed, it is not measuring balance. One minute per subject, within
+subject, so it needs no extra people, and it is the most decisive validity test
+available.
 
 ### Deliberately excluded
 
@@ -96,22 +105,38 @@ which is what thresholds should be set from rather than a fixed constant
 
 ---
 
-## 3. Marks
+## 3. Running a session in the app
 
-Use the label field in the recording bar. One mark at the start of each hold
-with the condition name, one labelled `end` when they come out:
+The operator runs the laptop; the subject only follows instructions.
 
-```
-tree_L      → hold starts
-end         → hold ends
-tree_L      → next rep
-```
+1. Fill in **subject, weight, height, experience**. They are remembered across
+   restarts, so for a returning subject there is nothing to type.
+2. Press **Record**. The session clock starts.
+3. Press a **number key** to start a hold, **Space** to end it:
+
+   | Key | Condition | Target | Reps |
+   | --- | --- | --- | --- |
+   | 1 | empty mat | 30 s | 2 — start and end |
+   | 2 | quiet standing | 60 s | 1 |
+   | 3 | eyes closed | 60 s | 1 |
+   | 4 / 5 | tree L / R | 30 s | 3 each |
+   | 6 / 7 | warrior 2 L / R | 30 s | 3 each |
+   | 8 | chair | 30 s | 3 |
+   | 9 | warrior 2 L, deliberate fault | 30 s | 1 |
+
+4. The **hold timer** turns green at the target. After Space it becomes a
+   **rest timer**, which turns green at 30 s — that is when to start the next.
+5. Each button counts its reps (`tree L 2/3`) and turns green when complete, so
+   the button row doubles as the session checklist.
+6. Something worth recording mid-hold — a wobble, a step-off? Type it in
+   **note** and press Enter, or press `m`.
+7. Press **Stop**. Closing the window mid-recording also stops cleanly.
+
+Rep counts are kept per subject across restarts. **reset reps** clears the
+current subject's counts if a session is being redone.
 
 `python recorder.py merge recordings/<session>.csv` then produces the flat table
-with a `label` column ([`recording_format.md`](recording_format.md) §3).
-
-Suggested names: `standing`, `tree_L`, `tree_R`, `warrior2_L`, `warrior2_R`,
-`chair`, `warrior2_L_fault`, plus `baseline_empty` and `baseline_standing`.
+with `pose`, `rep` and `label` columns ([`recording_format.md`](recording_format.md) §3).
 
 ---
 
