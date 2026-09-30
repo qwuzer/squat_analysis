@@ -8,12 +8,14 @@ Run: python mat_ui.py
 """
 
 import collections
+import json
 import math
 import os
 import random
 import threading
 import time
 import tkinter as tk
+from tkinter import messagebox, ttk
 
 from recorder import Recorder
 
@@ -104,6 +106,52 @@ RECORD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           'recordings')
 RECORD_HZ  = 100    # matches what the mats actually emit
 REC_ON     = '#E5484D'
+
+# ── session presets ───────────────────────────────────────────────────────────
+# The conditions from docs/collection_protocol.md. Keys 1-9 start a hold and
+# Space ends it. `target` is when the hold timer turns green; `reps` is what the
+# button counts toward. Neither is enforced — they exist so the operator can run
+# a session without keeping time and count in their head.
+POSES = [
+    # name                     button label    target s  reps
+    ('empty',                 'empty',         30,       2),  # start and end
+    ('standing',              'standing',      60,       1),
+    ('standing_eyes_closed',  'eyes closed',   60,       1),
+    ('tree_L',                'tree L',        30,       3),
+    ('tree_R',                'tree R',        30,       3),
+    ('warrior2_L',            'warrior2 L',    30,       3),
+    ('warrior2_R',            'warrior2 R',    30,       3),
+    ('chair',                 'chair',         30,       3),
+    ('warrior2_L_fault',      'W2 L fault',    30,       1),
+]
+REST_S = 30         # step off between holds; the rest timer turns green here
+
+# Field values and per-subject rep counts survive a restart. Local to this
+# machine and gitignored — it holds body weights.
+SETTINGS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             'mat_ui_settings.json')
+REMEMBERED = ('subject', 'weight_kg', 'height_cm', 'experience')
+
+
+def _mmss(t):
+    """Session clock: MM:SS, or H:MM:SS past the hour."""
+    t = max(0, int(t))
+    h, rem = divmod(t, 3600)
+    m, sec = divmod(rem, 60)
+    return f'{h}:{m:02d}:{sec:02d}' if h else f'{m:02d}:{sec:02d}'
+
+
+def _ms(t):
+    """Hold clock: M:SS."""
+    t = max(0, int(t))
+    return f'{t // 60}:{t % 60:02d}'
+
+
+def _num(text):
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return text.strip() or None
 
 # ── empty/pressed state machine ───────────────────────────────────────────────
 # Each channel starts EMPTY. A sudden jump UP flips it to PRESSED; a sudden drop
@@ -591,7 +639,9 @@ class RawChart:
         span = vmax - vmin
 
         # horizontal grid + y-axis labels (auto-scaled to the visible data)
-        for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
+        # five ticks need ~110 px or their labels overlap; three otherwise
+        ticks = (0.0, 0.25, 0.5, 0.75, 1.0) if y1 - y0 >= 110 else (0.0, 0.5, 1.0)
+        for frac in ticks:
             yy = y1 - (y1 - y0) * frac
             cv.create_line(x0, yy, x1, yy, fill=GRID)
             cv.create_text(x0 - 6, yy, anchor='e', fill=MUTED,
@@ -623,11 +673,17 @@ class App:
         self._data = {}
         self._demo = not HAS_SERIAL
         self._recorder = Recorder(self._data, range(4 * len(PORTS)), RECORD_HZ)
+        self._settings = self._load_settings()
+        self._hold     = None     # {'idx', 'name', 'rep', 'start'} while holding
+        self._last_end = None     # session time the last hold ended, for rest
+        self._flash    = None     # (text, colour, until) — a transient message
+        self._idle_status = 'not recording'
+        self._shown_text = {}     # label -> (text, colour), skips no-op updates
 
         root.title('Yoga Mat Monitor')
         root.configure(bg=BG)
         root.resizable(True, True)
-        root.minsize(960, 700)          # below this the bands/charts would overlap
+        root.minsize(1120, 760)         # below this the bands/charts would overlap
 
         self._build_ui()
 
@@ -636,6 +692,15 @@ class App:
         root.bind('<r>', lambda e: None if self._typing() else
                   (self._align.rezero(), [m.rezero_all() for m in self._mats]))
         root.bind('<m>', lambda e: None if self._typing() else self._mark())
+        # 1-9 start a hold for that pose, Space ends it
+        for i in range(len(POSES)):
+            root.bind(str(i + 1), lambda e, i=i:
+                      None if self._typing() else self._start_hold(i))
+        root.bind('<space>', lambda e: None if self._typing() else self._end_hold())
+        # closing mid-recording must still write the events file and sidecar,
+        # which only happens on stop
+        root.protocol('WM_DELETE_WINDOW', self._on_close)
+        self._refresh_pose_buttons()
 
         if self._demo:
             self._driver = DemoDriver(self._data)
@@ -674,24 +739,25 @@ class App:
             mat.grid(row=i, column=0, sticky='nsew', pady=5)
             self._mats.append(mat)
 
-        # right: the arrow, then the raw chart, then the aligned chart
+        # right: arrow and timers side by side, then the two charts
         right = tk.Frame(body, bg=BG)
         right.grid(row=0, column=1, sticky='nsew', padx=(7, 14), pady=9)
-        right.columnconfigure(0, weight=1)
+        right.columnconfigure(0, weight=3)
+        right.columnconfigure(1, weight=2)
         right.rowconfigure(1, weight=3)     # raw chart
         right.rowconfigure(2, weight=2)     # aligned chart
 
         arrow = self._card(right, f'Weight shift · {MAT_LABELS[ARROW_MAT]}',
-                           'direction of movement — blank while still')
-        arrow.grid(row=0, column=0, sticky='ew', pady=5)
+                           'blank while still')
+        arrow.grid(row=0, column=0, sticky='nsew', pady=5, padx=(0, 5))
         self._cross = ArrowCross(arrow.body)
         self._cross.pack(side='left')
         # the readout is big on purpose: it has to be legible from on the mat
         readout = tk.Frame(arrow.body, bg=CARD)
-        readout.pack(side='left', fill='y', padx=(28, 0))
+        readout.pack(side='left', fill='y', padx=(20, 0))
         tk.Frame(readout, bg=CARD).pack(expand=True, fill='both')
         self._dir_lbl = tk.Label(readout, text='still', bg=CARD, fg=MUTED,
-                                 font=(FONT, 28, 'bold'), anchor='w')
+                                 font=(FONT, 26, 'bold'), anchor='w')
         self._dir_lbl.pack(anchor='w')
         self._rate_lbl = tk.Label(readout, text='nothing moving above the noise',
                                   bg=CARD, fg=MUTED, font=(FONT, 10), anchor='w')
@@ -699,15 +765,39 @@ class App:
         tk.Frame(readout, bg=CARD).pack(expand=True, fill='both')
         self._shown = None
 
+        self._build_timer_card(right)
+
         raw = self._card(right, 'Raw signal', 'all 12 channels')
-        raw.grid(row=1, column=0, sticky='nsew', pady=5)
+        raw.grid(row=1, column=0, columnspan=2, sticky='nsew', pady=5)
         self._chart = RawChart(raw.body, CHART_CHANNELS)
 
         aligned = self._card(right, 'Raw − initial balance',
                              'a press pops above 0  ·  r to re-zero')
-        aligned.grid(row=2, column=0, sticky='nsew', pady=5)
+        aligned.grid(row=2, column=0, columnspan=2, sticky='nsew', pady=5)
         self._align = RawChart(aligned.body, CHART_CHANNELS, zeroed=True,
                                height=ALIGN_H)
+
+    def _build_timer_card(self, parent):
+        """Session clock since Record, and the current hold or rest."""
+        card = self._card(parent, 'Timer')
+        card.grid(row=0, column=1, sticky='nsew', pady=5, padx=(5, 0))
+        b = card.body
+
+        def caption(text):
+            tk.Label(b, text=text, bg=CARD, fg=MUTED,
+                     font=(FONT, 7, 'bold')).pack(anchor='w')
+
+        caption('SESSION')
+        self._sess_lbl = tk.Label(b, text='00:00', bg=CARD, fg=MUTED,
+                                  font=(MONO, 24, 'bold'))
+        self._sess_lbl.pack(anchor='w', pady=(0, 8))
+        caption('HOLD')
+        self._hold_name = tk.Label(b, text='—', bg=CARD, fg=MUTED,
+                                   font=(FONT, 10))
+        self._hold_name.pack(anchor='w')
+        self._hold_lbl = tk.Label(b, text='0:00', bg=CARD, fg=MUTED,
+                                  font=(MONO, 28, 'bold'))
+        self._hold_lbl.pack(anchor='w')
 
     def _card(self, parent, title, subtitle=''):
         """A white panel with a title row; put content in `.body`."""
@@ -745,41 +835,62 @@ class App:
             self._pills[name].config(text='\u25cf ' + text, fg=colour)
 
     def _build_record_bar(self):
-        """Session fields and controls, pinned to the bottom of the window."""
-        bar = tk.Frame(self.root, bg=CARD, padx=16, pady=10)
-        bar.pack(fill='x', side='bottom')
+        """Two rows pinned to the bottom: session fields, then pose presets."""
+        wrapper = tk.Frame(self.root, bg=CARD, padx=16, pady=10)
+        wrapper.pack(fill='x', side='bottom')
         tk.Frame(self.root, bg=BORDER, height=1).pack(fill='x', side='bottom')
 
-        def field(title, width):
-            col = tk.Frame(bar, bg=CARD)
+        top = tk.Frame(wrapper, bg=CARD)
+        top.pack(fill='x')
+        poses = tk.Frame(wrapper, bg=CARD)
+        poses.pack(fill='x', pady=(10, 0))
+
+        def column(title):
+            col = tk.Frame(top, bg=CARD)
             col.pack(side='left', padx=(0, 12))
             tk.Label(col, text=title.upper(), bg=CARD, fg=MUTED,
                      font=(FONT, 7, 'bold')).pack(anchor='w')
+            return col
+
+        def field(title, width):
+            col = column(title)
             # tk.Entry has no inner padding, so a wrapper frame carries the
             # border and the entry sits inside it with room either side
-            wrap = tk.Frame(col, bg=TILE, highlightthickness=1,
-                            highlightbackground=BORDER, highlightcolor=BORDER)
-            wrap.pack(anchor='w')
-            entry = tk.Entry(wrap, width=width, bg=TILE, fg=FG,
+            box = tk.Frame(col, bg=TILE, highlightthickness=1,
+                           highlightbackground=BORDER, highlightcolor=BORDER)
+            box.pack(anchor='w')
+            entry = tk.Entry(box, width=width, bg=TILE, fg=FG,
                              insertbackground=FG, relief='flat', bd=0,
                              highlightthickness=0, font=(FONT, 10))
             entry.pack(padx=8, pady=5)
             entry.bind('<FocusIn>',
-                       lambda e: wrap.config(highlightbackground=ACCENT))
+                       lambda e: box.config(highlightbackground=ACCENT))
             entry.bind('<FocusOut>',
-                       lambda e: wrap.config(highlightbackground=BORDER))
+                       lambda e: (box.config(highlightbackground=BORDER),
+                                  self._fields_changed()))
             # Enter commits the field and hands the keyboard back to the hotkeys
             entry.bind('<Return>', lambda e: self.root.focus_set())
             return entry
 
-        self._subject = field('subject', 12)
-        self._pose    = field('pose', 16)
-        self._label   = field('label', 18)
-        # Enter in the label box drops the mark straight away
+        self._subject = field('subject', 10)
+        weight = field('weight kg', 6)
+        height = field('height cm', 6)
+        exp_col = column('experience')
+        experience = ttk.Combobox(exp_col, values=['none', 'some', 'regular'],
+                                  width=9, state='readonly', font=(FONT, 10))
+        experience.pack(anchor='w', ipady=3)
+        experience.bind('<<ComboboxSelected>>',
+                        lambda e: (self._fields_changed(),
+                                   self.root.focus_set()))
+        self._label = field('note', 18)
+        # Enter in the note box drops it straight away
         self._label.bind('<Return>', lambda e: (self._mark(),
                                                 self.root.focus_set()))
+        self._fields = {'subject': self._subject, 'weight_kg': weight,
+                        'height_cm': height, 'experience': experience}
+        self._restore_fields()
 
-        btns = tk.Frame(bar, bg=CARD)
+        btns = tk.Frame(top, bg=CARD)
         btns.pack(side='left', padx=(4, 14), pady=(15, 0))
         self._rec_btn = tk.Button(
             btns, text='\u25cf  Record', width=10, relief='flat', bd=0,
@@ -787,17 +898,36 @@ class App:
             command=self._toggle_record)
         self._rec_btn.pack(side='left', padx=(0, 8))
         self._style_record_btn(False)
-
         self._mark_btn = tk.Button(
-            btns, text='Mark  (m)', width=10, relief='flat', bd=0,
+            btns, text='Note  (m)', width=9, relief='flat', bd=0,
             bg=GRID, fg=FG, activebackground=BORDER, activeforeground=FG,
             disabledforeground=MUTED, font=(FONT, 10), cursor='hand2',
             padx=8, pady=3, command=self._mark, state='disabled')
         self._mark_btn.pack(side='left')
 
-        self._rec_status = tk.Label(bar, text='not recording', bg=CARD,
+        self._rec_status = tk.Label(top, text=self._idle_status, bg=CARD,
                                     fg=MUTED, font=(FONT, 9), anchor='w')
         self._rec_status.pack(side='left', fill='x', expand=True, pady=(15, 0))
+
+        # one button per protocol condition; the number is its hotkey
+        self._pose_btns = []
+        for i, (name, label, target, reps) in enumerate(POSES):
+            b = tk.Button(poses, text='', width=11, relief='flat', bd=0,
+                          font=(FONT, 9), cursor='hand2', padx=4, pady=3,
+                          disabledforeground=MUTED,
+                          command=lambda i=i: self._start_hold(i))
+            b.pack(side='left', padx=(0, 6))
+            self._pose_btns.append(b)
+        self._end_btn = tk.Button(
+            poses, text='\u25a0  End hold\nspace', width=11, relief='flat',
+            bd=0, bg=FG, fg='#FFFFFF', activebackground=_blend(FG, '#FFFFFF', 0.2),
+            activeforeground='#FFFFFF', disabledforeground=MUTED,
+            font=(FONT, 9, 'bold'), cursor='hand2', padx=4, pady=3,
+            command=self._end_hold)
+        self._end_btn.pack(side='left', padx=(6, 6))
+        tk.Button(poses, text='reset\nreps', width=6, relief='flat', bd=0,
+                  bg=CARD, fg=MUTED, activebackground=GRID, font=(FONT, 8),
+                  cursor='hand2', command=self._reset_reps).pack(side='left')
 
     def _style_record_btn(self, recording):
         if recording:
@@ -810,41 +940,204 @@ class App:
                                  activebackground=_blend(CARD, REC_ON, 0.22),
                                  activeforeground=REC_ON)
 
+    # ── remembered fields ────────────────────────────────────────────────────
+
+    def _load_settings(self):
+        try:
+            with open(SETTINGS_PATH, encoding='utf-8') as fh:
+                return json.load(fh)
+        except (OSError, ValueError):
+            return {}
+
+    def _save_settings(self):
+        self._settings['fields'] = {k: w.get() for k, w in self._fields.items()}
+        try:
+            with open(SETTINGS_PATH, 'w', encoding='utf-8') as fh:
+                json.dump(self._settings, fh, indent=2, ensure_ascii=False)
+        except OSError:
+            pass                        # never let a settings write stop a session
+
+    def _restore_fields(self):
+        for key, value in self._settings.get('fields', {}).items():
+            w = self._fields.get(key)
+            if w is None:
+                continue
+            if isinstance(w, ttk.Combobox):
+                w.set(value)
+            else:
+                w.delete(0, 'end')
+                w.insert(0, value)
+
+    def _fields_changed(self):
+        self._save_settings()
+        self._refresh_pose_buttons()     # a new subject has its own rep counts
+
+    def _subject_name(self):
+        return self._subject.get().strip() or 'session'
+
+    def _reps(self):
+        """This subject's completed reps per pose, kept across restarts."""
+        return (self._settings.setdefault('reps', {})
+                .setdefault(self._subject_name(), {}))
+
+    def _reset_reps(self):
+        if messagebox.askyesno('Reset reps',
+                               f'Clear the rep counts for '
+                               f'{self._subject_name()}?', parent=self.root):
+            self._settings.setdefault('reps', {})[self._subject_name()] = {}
+            self._save_settings()
+            self._refresh_pose_buttons()
+        self.root.focus_set()
+
+    # ── holds ────────────────────────────────────────────────────────────────
+
+    def _start_hold(self, idx):
+        if not self._recorder.active:
+            self._say('press Record first', ERR_COL)
+            return
+        if self._hold:
+            self._end_hold()             # a new pose closes the one in progress
+        name, label, target, reps = POSES[idx]
+        rep = self._reps().get(name, 0) + 1
+        self._hold = {'idx': idx, 'name': name, 'rep': rep,
+                      'start': self._recorder.elapsed}
+        self._recorder.mark('', pose=name, rep=rep)
+        self._refresh_pose_buttons()
+        self._say(f'{label} — rep {rep} started')
+        self.root.focus_set()
+
+    def _end_hold(self):
+        h = self._hold
+        if not h:
+            return
+        self._recorder.mark('end', pose=h['name'], rep=h['rep'])
+        took = self._recorder.elapsed - h['start']
+        self._reps()[h['name']] = h['rep']
+        self._hold = None
+        self._last_end = self._recorder.elapsed
+        self._save_settings()
+        self._refresh_pose_buttons()
+        self._say(f"{POSES[h['idx']][1]} — rep {h['rep']} held {took:.0f} s")
+        self.root.focus_set()
+
+    def _refresh_pose_buttons(self):
+        counts = self._reps()
+        live = self._recorder.active
+        for i, (name, label, target, reps) in enumerate(POSES):
+            b = self._pose_btns[i]
+            done = counts.get(name, 0)
+            b.config(text=f'{i + 1}  {label}\n{done}/{reps}',
+                     state='normal' if live else 'disabled')
+            if self._hold and self._hold['idx'] == i:
+                b.config(bg=ACCENT, fg='#FFFFFF', activebackground=ACCENT,
+                         activeforeground='#FFFFFF')
+            elif done >= reps:
+                b.config(bg=_blend(CARD, OK_COL, 0.14),
+                         fg=_blend(OK_COL, '#000000', 0.25),
+                         activebackground=_blend(CARD, OK_COL, 0.24),
+                         activeforeground=FG)
+            else:
+                b.config(bg=GRID, fg=FG, activebackground=BORDER,
+                         activeforeground=FG)
+        self._end_btn.config(state='normal' if self._hold else 'disabled',
+                             bg=FG if self._hold else GRID)
+
+    # ── recording ────────────────────────────────────────────────────────────
+
     def _typing(self):
         """True while a text box has focus, so hotkeys do not steal keystrokes."""
         return isinstance(self.root.focus_get(), tk.Entry)
 
     def _toggle_record(self):
         if self._recorder.active:
+            self._end_hold()
             meta = self._recorder.stop(self._port_stats())
             self._style_record_btn(False)
             self._mark_btn.config(state='disabled')
-            self._rec_status.config(
-                text=f"saved {os.path.basename(self._recorder.path)}  \u00b7  "
-                     f"{meta['rows']:,} rows, {meta['events']} marks", fg=FG)
+            self._idle_status = (f"saved {os.path.basename(self._recorder.path)}"
+                                 f"  \u00b7  {meta['rows']:,} rows, "
+                                 f"{meta['events']} marks")
+            self._flash = None
         else:
-            subject = self._subject.get().strip() or 'session'
-            path = self._recorder.start(RECORD_DIR, subject, meta={
+            f = {k: w.get() for k, w in self._fields.items()}
+            path = self._recorder.start(RECORD_DIR, self._subject_name(), meta={
                 'mat_channels': {MAT_LABELS[i]: chans
                                  for i, chans in enumerate(MAT_CHANNELS)},
                 'ports': PORTS,
                 'baud': BAUD,
                 'demo': self._demo,
+                'subject_info': {'weight_kg': _num(f['weight_kg']),
+                                 'height_cm': _num(f['height_cm']),
+                                 'experience': f['experience'] or None},
             })
             self._style_record_btn(True)
             self._mark_btn.config(state='normal')
-            self._rec_status.config(text=f'recording to {os.path.basename(path)}')
+            self._last_end = None
+            self._say(f'recording to {os.path.basename(path)}')
+        self._save_settings()
+        self._refresh_pose_buttons()
         self.root.focus_set()
 
     def _mark(self):
-        pose = self._pose.get().strip()
-        label = self._label.get().strip()
-        if not pose and not label:
-            label = 'mark'
-        if self._recorder.mark(label, pose):
-            what = ' / '.join(x for x in (pose, label) if x)
-            self._rec_status.config(
-                text=f'marked {what} at {self._recorder.elapsed:.1f}s', fg=FG)
+        note = self._label.get().strip() or 'mark'
+        h = self._hold
+        if self._recorder.mark(note, pose=h['name'] if h else '',
+                               rep=h['rep'] if h else ''):
+            self._label.delete(0, 'end')          # a note belongs to one moment
+            self._say(f'noted "{note}" at {self._recorder.elapsed:.1f}s')
+
+    def _on_close(self):
+        if self._recorder.active:
+            self._toggle_record()
+        self._save_settings()
+        self.root.destroy()
+
+    # ── live readouts ────────────────────────────────────────────────────────
+
+    def _say(self, text, colour=FG, secs=4.0):
+        self._flash = (text, colour, time.monotonic() + secs)
+
+    def _show(self, widget, text, colour):
+        if self._shown_text.get(widget) != (text, colour):
+            self._shown_text[widget] = (text, colour)
+            widget.config(text=text, fg=colour)
+
+    def _update_timers(self):
+        rec = self._recorder
+        if not rec.active:
+            self._show(self._sess_lbl, self._sess_lbl.cget('text'), MUTED)
+            self._show(self._hold_name, '—', MUTED)
+            self._show(self._hold_lbl, '0:00', MUTED)
+            return
+        now = rec.elapsed
+        self._show(self._sess_lbl, _mmss(now), REC_ON)
+        h = self._hold
+        if h:
+            name, label, target, reps = POSES[h['idx']]
+            held = now - h['start']
+            self._show(self._hold_name, f"{label}  \u00b7  rep {h['rep']}/{reps}",
+                       FG)
+            self._show(self._hold_lbl, f'{_ms(held)} / {_ms(target)}',
+                       OK_COL if held >= target else FG)
+        elif self._last_end is not None:
+            rest = now - self._last_end
+            self._show(self._hold_name, 'rest \u2014 step off the mat', MUTED)
+            self._show(self._hold_lbl, f'{_ms(rest)} / {_ms(REST_S)}',
+                       OK_COL if rest >= REST_S else MUTED)
+        else:
+            self._show(self._hold_name, 'press 1\u20139 to start a hold', MUTED)
+            self._show(self._hold_lbl, '0:00', MUTED)
+
+    def _update_status(self):
+        if self._flash and time.monotonic() < self._flash[2]:
+            text, colour = self._flash[:2]
+        elif self._recorder.active:
+            text = (f'recording to {os.path.basename(self._recorder.path)}'
+                    f'  \u00b7  {self._recorder.rows:,} rows')
+            colour = MUTED
+        else:
+            text, colour = self._idle_status, MUTED
+        self._show(self._rec_status, text, colour)
 
     def _port_stats(self):
         return {r.port: {'frames': r.frames, 'bad_checksum': r.bad,
@@ -878,11 +1171,8 @@ class App:
         self._align.push(self._data)
         self._align.redraw()
 
-        if self._recorder.active:
-            t = self._recorder.elapsed
-            self._rec_status.config(
-                text=f'\u25cf REC  {int(t)//60:02d}:{int(t)%60:02d}   '
-                     f'{self._recorder.rows:,} rows', fg=REC_ON)
+        self._update_timers()
+        self._update_status()
 
         if self._demo:
             self._set_pill('demo', 'demo mode — no ports', WARN_COL)

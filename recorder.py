@@ -28,7 +28,7 @@ import threading
 import time
 
 
-EVENT_COLUMNS = ['Time', 'elapsed_s', 'pose', 'label']
+EVENT_COLUMNS = ['Time', 'elapsed_s', 'pose', 'rep', 'label']
 
 
 def clock_str(t):
@@ -103,14 +103,15 @@ class Recorder:
         self._thread.start()
         return self.path
 
-    def mark(self, label, pose=''):
-        """Drop a timestamped mark carrying the current pose and a label.
-        Ignored when not recording."""
+    def mark(self, label, pose='', rep=''):
+        """Drop a timestamped mark carrying the current pose, its rep number
+        and a label. Ignored when not recording."""
         if not self.active:
             return False
         self.events.append({'Time': clock_str(time.time()),
                             'elapsed_s': round(self.elapsed, 4),
                             'pose': pose,
+                            'rep': rep,
                             'label': label})
         return True
 
@@ -169,13 +170,13 @@ class Recorder:
 # ── joining marks back onto the signal ────────────────────────────────────────
 
 def merge_labels(signal_csv, events_csv=None, out_csv=None, none_label=''):
-    """Write a copy of the signal with `pose` and `label` columns from the marks.
+    """Write a copy of the signal with `pose`, `rep` and `label` columns.
 
     A mark applies from its own timestamp until the next one, so a held pose is
     the span between two marks. A mark labelled `end` or `-` closes the current
-    span — clearing both columns — without opening a new one. Event files
-    recorded before the pose field existed have no `pose` column; they merge
-    with an empty pose.
+    span — clearing all three columns — without opening a new one. Event files
+    recorded before the pose or rep fields existed simply lack those columns;
+    they merge with them empty.
 
     Storage keeps the two apart — re-labelling never rewrites a signal file, and
     two people can label the same session independently. This is the joined view
@@ -191,17 +192,18 @@ def merge_labels(signal_csv, events_csv=None, out_csv=None, none_label=''):
             for row in csv.DictReader(fh):
                 label = row['label'].strip()
                 pose = (row.get('pose') or '').strip()
+                rep = (row.get('rep') or '').strip()
                 if label in ('end', '-'):
-                    pose, label = none_label, none_label
-                marks.append((float(row['elapsed_s']), pose, label))
+                    pose = rep = label = none_label
+                marks.append((float(row['elapsed_s']), pose, rep, label))
     marks.sort(key=lambda m: m[0])
 
-    n, i, current = 0, 0, (none_label, none_label)
+    n, i, current = 0, 0, (none_label,) * 3
     with open(signal_csv, newline='', encoding='utf-8') as src, \
             open(out_csv, 'w', newline='', encoding='utf-8') as dst:
         reader = csv.reader(src)
         writer = csv.writer(dst)
-        writer.writerow(next(reader) + ['pose', 'label'])
+        writer.writerow(next(reader) + ['pose', 'rep', 'label'])
         for row in reader:
             t = float(row[1])                      # elapsed_s
             while i < len(marks) and marks[i][0] <= t:

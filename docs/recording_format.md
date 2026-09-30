@@ -7,18 +7,35 @@
 
 ## 1. Using it
 
-Run `python mat_ui.py`. The bar above the status line has everything:
+Run `python mat_ui.py`. The panel at the bottom has two rows.
 
-| Control | Does |
+**Session fields** — subject, weight, height, experience, and a note box. The
+first four are remembered in `mat_ui_settings.json` (local, gitignored — it holds
+body weights) and restored on the next launch.
+
+**Pose buttons** — one per protocol condition. Keys **1–9** start a hold for
+that pose and **Space** ends it. Starting a new pose while one is running ends
+the current one first. Each button shows completed reps against the target, and
+those counts are also remembered per subject.
+
+**Timer card** (top right):
+
+| Readout | Shows |
 | --- | --- |
-| **subject** | names the session and goes in the sidecar |
-| **pose** | the move being performed (e.g. `tree_L`); stays set between marks |
-| **label** | optional extra text a mark carries (e.g. `wobble`). Enter in this box marks immediately |
-| **● Record** | start / stop |
-| **Mark** or `m` | drop a timestamped mark carrying the current pose and label |
+| **Session** | time since Record, red while recording |
+| **Hold** | pose, rep, and elapsed vs target — turns green at the target |
+| **Rest** | after a hold ends, time since — turns green at 30 s |
 
-`r` still re-zeroes the aligned chart. Both hotkeys are ignored while a text box
-has focus, so typing a label does not trigger them.
+| Key | Does |
+| --- | --- |
+| `1`–`9` | start a hold |
+| `Space` | end the hold |
+| `m` | note, using the text in the note box (or Enter in that box) |
+| `r` | re-zero the aligned chart |
+
+Hotkeys are ignored while a text box has focus. **Closing the window while
+recording stops the recording first**, so the events file and sidecar are never
+lost.
 
 Files land in `recordings/`, which is gitignored.
 
@@ -43,8 +60,13 @@ actually wants, and because comparing the two exposes clock problems.
 
 ### `<name>_events.csv` — the labels
 
-`Time`, `elapsed_s`, `pose`, `label` — one row per mark. Files recorded before
-the pose field existed have no `pose` column and still merge, with an empty pose.
+`Time`, `elapsed_s`, `pose`, `rep`, `label` — one row per mark.
+
+Starting a hold writes a mark with the pose and rep and an empty label; ending
+it writes the same pose and rep with label `end`. A note writes its text as the
+label, carrying the current pose and rep if a hold is running. Files recorded
+before the pose or rep fields existed lack those columns and still merge, with
+them empty.
 
 Labels live **outside** the signal file. In the bicep pipeline `Reps`, `RIR` and
 `actions` are columns bolted onto the signal, which means re-segmenting forces
@@ -71,15 +93,21 @@ Marks are **not** a column in the signal file. To produce one:
 python recorder.py merge recordings/subj_20260917_173508.csv
 ```
 
-That writes `..._labelled.csv` — the same rows plus `pose` and `label` columns.
+That writes `..._labelled.csv` — the same rows plus `pose`, `rep` and `label`
+columns.
 
 A mark applies **from its own timestamp until the next one**, so a held pose is
 the span between two marks. A mark labelled `end` or `-` closes the current span
 without opening a new one.
 
 ```
-  0.010s  pose=''        label=''
-  0.620s  pose='tree_L'  label='wobble'
+  0.0s  ·
+  0.0s  empty   #1
+  1.3s  ·
+  1.7s  tree_L  #1
+  2.8s  ·
+  2.8s  tree_R  #1
+  3.2s  ·
 ```
 
 Storing them apart and joining on demand is deliberate: re-labelling never
