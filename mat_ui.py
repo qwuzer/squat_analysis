@@ -674,7 +674,8 @@ class App:
         self._demo = not HAS_SERIAL
         self._recorder = Recorder(self._data, range(4 * len(PORTS)), RECORD_HZ)
         self._settings = self._load_settings()
-        self._hold     = None     # {'idx', 'name', 'rep', 'start'} while holding
+        self._hold     = None     # {'idx', 'name', 'rep', 'start'}; rep is the
+                                  # operator's counter only, it is not saved
         self._last_end = None     # session time the last hold ended, for rest
         self._flash    = None     # (text, colour, until) — a transient message
         self._idle_status = 'not recording'
@@ -687,18 +688,17 @@ class App:
 
         self._build_ui()
 
-        # press 'r' to re-capture the initial balance (aligned chart re-zeroes),
-        # 'm' to drop a label. Both are ignored while a text box has focus.
+        # press 'r' to re-capture the initial balance (aligned chart re-zeroes).
+        # Hotkeys are ignored while a text box has focus.
         root.bind('<r>', lambda e: None if self._typing() else
                   (self._align.rezero(), [m.rezero_all() for m in self._mats]))
-        root.bind('<m>', lambda e: None if self._typing() else self._mark())
         # 1-9 start a hold for that pose, Space ends it
         for i in range(len(POSES)):
             root.bind(str(i + 1), lambda e, i=i:
                       None if self._typing() else self._start_hold(i))
         root.bind('<space>', lambda e: None if self._typing() else self._end_hold())
-        # closing mid-recording must still write the events file and sidecar,
-        # which only happens on stop
+        # closing mid-recording must still close the open hold and write the
+        # sidecar, both of which only happen on stop
         root.protocol('WM_DELETE_WINDOW', self._on_close)
         self._refresh_pose_buttons()
 
@@ -882,10 +882,6 @@ class App:
         experience.bind('<<ComboboxSelected>>',
                         lambda e: (self._fields_changed(),
                                    self.root.focus_set()))
-        self._label = field('note', 18)
-        # Enter in the note box drops it straight away
-        self._label.bind('<Return>', lambda e: (self._mark(),
-                                                self.root.focus_set()))
         self._fields = {'subject': self._subject, 'weight_kg': weight,
                         'height_cm': height, 'experience': experience}
         self._restore_fields()
@@ -896,14 +892,8 @@ class App:
             btns, text='\u25cf  Record', width=10, relief='flat', bd=0,
             font=(FONT, 10, 'bold'), cursor='hand2', padx=8, pady=3,
             command=self._toggle_record)
-        self._rec_btn.pack(side='left', padx=(0, 8))
+        self._rec_btn.pack(side='left')
         self._style_record_btn(False)
-        self._mark_btn = tk.Button(
-            btns, text='Note  (m)', width=9, relief='flat', bd=0,
-            bg=GRID, fg=FG, activebackground=BORDER, activeforeground=FG,
-            disabledforeground=MUTED, font=(FONT, 10), cursor='hand2',
-            padx=8, pady=3, command=self._mark, state='disabled')
-        self._mark_btn.pack(side='left')
 
         self._rec_status = tk.Label(top, text=self._idle_status, bg=CARD,
                                     fg=MUTED, font=(FONT, 9), anchor='w')
@@ -969,8 +959,13 @@ class App:
                 w.insert(0, value)
 
     def _fields_changed(self):
-        self._save_settings()
-        self._refresh_pose_buttons()     # a new subject has its own rep counts
+        # also fires on FocusOut while the window is being torn down, when the
+        # widgets are already gone — settings were saved just before, so skip
+        try:
+            self._save_settings()
+            self._refresh_pose_buttons()     # a new subject has its own rep counts
+        except tk.TclError:
+            pass
 
     def _subject_name(self):
         return self._subject.get().strip() or 'session'
@@ -1001,23 +996,24 @@ class App:
         rep = self._reps().get(name, 0) + 1
         self._hold = {'idx': idx, 'name': name, 'rep': rep,
                       'start': self._recorder.elapsed}
-        self._recorder.mark('', pose=name, rep=rep)
         self._refresh_pose_buttons()
-        self._say(f'{label} — rep {rep} started')
+        self._say(f'{label} — hold {rep} of {reps} started')
         self.root.focus_set()
 
     def _end_hold(self):
         h = self._hold
         if not h:
             return
-        self._recorder.mark('end', pose=h['name'], rep=h['rep'])
-        took = self._recorder.elapsed - h['start']
+        now = self._recorder.elapsed
+        self._recorder.add_hold(h['name'], h['start'], now)
+        took = now - h['start']
         self._reps()[h['name']] = h['rep']
         self._hold = None
-        self._last_end = self._recorder.elapsed
+        self._last_end = now
         self._save_settings()
         self._refresh_pose_buttons()
-        self._say(f"{POSES[h['idx']][1]} — rep {h['rep']} held {took:.0f} s")
+        self._say(f"{POSES[h['idx']][1]} — hold {h['rep']} done, "
+                  f"{took:.0f} s")
         self.root.focus_set()
 
     def _refresh_pose_buttons(self):
@@ -1053,10 +1049,9 @@ class App:
             self._end_hold()
             meta = self._recorder.stop(self._port_stats())
             self._style_record_btn(False)
-            self._mark_btn.config(state='disabled')
             self._idle_status = (f"saved {os.path.basename(self._recorder.path)}"
                                  f"  \u00b7  {meta['rows']:,} rows, "
-                                 f"{meta['events']} marks")
+                                 f"{meta['holds']} holds")
             self._flash = None
         else:
             f = {k: w.get() for k, w in self._fields.items()}
@@ -1071,20 +1066,11 @@ class App:
                                  'experience': f['experience'] or None},
             })
             self._style_record_btn(True)
-            self._mark_btn.config(state='normal')
             self._last_end = None
             self._say(f'recording to {os.path.basename(path)}')
         self._save_settings()
         self._refresh_pose_buttons()
         self.root.focus_set()
-
-    def _mark(self):
-        note = self._label.get().strip() or 'mark'
-        h = self._hold
-        if self._recorder.mark(note, pose=h['name'] if h else '',
-                               rep=h['rep'] if h else ''):
-            self._label.delete(0, 'end')          # a note belongs to one moment
-            self._say(f'noted "{note}" at {self._recorder.elapsed:.1f}s')
 
     def _on_close(self):
         if self._recorder.active:
@@ -1115,8 +1101,8 @@ class App:
         if h:
             name, label, target, reps = POSES[h['idx']]
             held = now - h['start']
-            self._show(self._hold_name, f"{label}  \u00b7  rep {h['rep']}/{reps}",
-                       FG)
+            self._show(self._hold_name,
+                       f"{label}  \u00b7  hold {h['rep']} of {reps}", FG)
             self._show(self._hold_lbl, f'{_ms(held)} / {_ms(target)}',
                        OK_COL if held >= target else FG)
         elif self._last_end is not None:

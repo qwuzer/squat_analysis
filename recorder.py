@@ -6,7 +6,7 @@ a uniform grid, a wall-clock `Time` column in `H-MM-SS.fff`, one column per
 channel. Three files per session:
 
     <name>.csv          the signal
-    <name>_events.csv   labels dropped during the session, with timestamps
+    <name>_holds.csv    one row per hold: pose, start_s, end_s
     <name>.json         session metadata and per-port frame counts
 
 Keeping metadata in a sidecar rather than repeating it on every row is the one
@@ -28,7 +28,7 @@ import threading
 import time
 
 
-EVENT_COLUMNS = ['Time', 'elapsed_s', 'pose', 'rep', 'label']
+HOLD_COLUMNS = ['pose', 'start_s', 'end_s']
 
 
 def clock_str(t):
@@ -66,7 +66,8 @@ class Recorder:
         self.dropped  = 0          # grid ticks where a channel had no value yet
         self.started  = None       # wall clock
         self._perf0   = None
-        self.events   = []
+        self.holds    = 0
+        self._holds_path = None
         self._meta    = {}
 
     @property
@@ -98,21 +99,29 @@ class Recorder:
             'columns': ['Time', 'elapsed_s'] + [f'ch{c}' for c in self._channels],
             'code_version': _git_sha(),
         })
+        # the holds file is created now and appended to as each hold ends, so a
+        # crash mid-session loses at most the hold in progress
+        self._holds_path = self.path[:-4] + '_holds.csv'
+        with open(self._holds_path, 'w', newline='', encoding='utf-8') as fh:
+            csv.writer(fh).writerow(HOLD_COLUMNS)
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         return self.path
 
-    def mark(self, label, pose='', rep=''):
-        """Drop a timestamped mark carrying the current pose, its rep number
-        and a label. Ignored when not recording."""
-        if not self.active:
+    def add_hold(self, pose, start_s, end_s):
+        """Append one completed hold. Times are elapsed_s, the same clock as the
+        signal file, so a hold is every signal row with start_s <= t < end_s.
+
+        These are the raw button times. A hold includes getting into the pose
+        and coming out of it; trimming that is a feature-extraction decision,
+        so it is not baked in here.
+        """
+        if self._holds_path is None:
             return False
-        self.events.append({'Time': clock_str(time.time()),
-                            'elapsed_s': round(self.elapsed, 4),
-                            'pose': pose,
-                            'rep': rep,
-                            'label': label})
+        with open(self._holds_path, 'a', newline='', encoding='utf-8') as fh:
+            csv.writer(fh).writerow([pose, f'{start_s:.4f}', f'{end_s:.4f}'])
+        self.holds += 1
         return True
 
     def stop(self, port_stats=None):
@@ -126,16 +135,12 @@ class Recorder:
             'duration_s': round(self.elapsed, 3),
             'rows': self.rows,
             'rows_with_gaps': self.dropped,
-            'events': len(self.events),
+            'holds': self.holds,
             'ports': port_stats or {},
         })
         base = self.path[:-4]
         with open(base + '.json', 'w', encoding='utf-8') as fh:
             json.dump(self._meta, fh, indent=2, ensure_ascii=False)
-        with open(base + '_events.csv', 'w', newline='', encoding='utf-8') as fh:
-            w = csv.DictWriter(fh, fieldnames=EVENT_COLUMNS)
-            w.writeheader()
-            w.writerows(self.events)
         return self._meta
 
     # ── writer thread ────────────────────────────────────────────────────────
@@ -167,56 +172,76 @@ class Recorder:
                     last_flush = now
 
 
-# ── joining marks back onto the signal ────────────────────────────────────────
+# ── joining holds back onto the signal ────────────────────────────────────────
 
-def merge_labels(signal_csv, events_csv=None, out_csv=None, none_label=''):
-    """Write a copy of the signal with `pose`, `rep` and `label` columns.
+def load_holds(path):
+    """[(pose, start_s, end_s)] sorted by start.
 
-    A mark applies from its own timestamp until the next one, so a held pose is
-    the span between two marks. A mark labelled `end` or `-` closes the current
-    span — clearing all three columns — without opening a new one. Event files
-    recorded before the pose or rep fields existed simply lack those columns;
-    they merge with them empty.
+    Reads the current holds file, and also the older event logs from before it
+    existed (a mark starts a pose, `end` closes it), so early recordings stay
+    usable. In those, a hold still open when the file ends gets end_s = inf.
+    """
+    with open(path, newline='', encoding='utf-8') as fh:
+        rows = list(csv.DictReader(fh))
+    if not rows:
+        return []
+    if 'start_s' in rows[0]:
+        holds = [(r['pose'], float(r['start_s']), float(r['end_s'])) for r in rows]
+        return sorted(holds, key=lambda h: h[1])
 
-    Storage keeps the two apart — re-labelling never rewrites a signal file, and
-    two people can label the same session independently. This is the joined view
-    for tools that want one flat table, generated on demand rather than baked in.
+    holds, open_ = [], None
+    for r in sorted(rows, key=lambda r: float(r['elapsed_s'])):
+        t = float(r['elapsed_s'])
+        label = (r.get('label') or '').strip()
+        pose = (r.get('pose') or '').strip() or label
+        if label in ('end', '-'):
+            if open_:
+                holds.append((open_[0], open_[1], t))
+                open_ = None
+        elif open_ is None or pose != open_[0]:
+            if open_:
+                holds.append((open_[0], open_[1], t))
+            open_ = (pose, t)
+        # same pose again with another label was a note — not a boundary
+    if open_:
+        holds.append((open_[0], open_[1], float('inf')))
+    return holds
+
+
+def merge_labels(signal_csv, holds_csv=None, out_csv=None):
+    """Write a copy of the signal with a `pose` column: the pose of the hold that
+    row falls in, or empty between holds.
+
+    Storage keeps the two apart, so fixing a hold never rewrites a signal file.
+    This is the joined view for tools that want one flat table.
     """
     base = signal_csv[:-4]
-    events_csv = events_csv or base + '_events.csv'
+    if holds_csv is None:
+        holds_csv = base + '_holds.csv'
+        if not os.path.exists(holds_csv):            # recorded before holds files
+            holds_csv = base + '_events.csv'
     out_csv = out_csv or base + '_labelled.csv'
+    holds = load_holds(holds_csv) if os.path.exists(holds_csv) else []
 
-    marks = []
-    if os.path.exists(events_csv):
-        with open(events_csv, newline='', encoding='utf-8') as fh:
-            for row in csv.DictReader(fh):
-                label = row['label'].strip()
-                pose = (row.get('pose') or '').strip()
-                rep = (row.get('rep') or '').strip()
-                if label in ('end', '-'):
-                    pose = rep = label = none_label
-                marks.append((float(row['elapsed_s']), pose, rep, label))
-    marks.sort(key=lambda m: m[0])
-
-    n, i, current = 0, 0, (none_label,) * 3
+    n, i = 0, 0
     with open(signal_csv, newline='', encoding='utf-8') as src, \
             open(out_csv, 'w', newline='', encoding='utf-8') as dst:
         reader = csv.reader(src)
         writer = csv.writer(dst)
-        writer.writerow(next(reader) + ['pose', 'rep', 'label'])
+        writer.writerow(next(reader) + ['pose'])
         for row in reader:
             t = float(row[1])                      # elapsed_s
-            while i < len(marks) and marks[i][0] <= t:
-                current = marks[i][1:]
-                i += 1
-            writer.writerow(row + list(current))
+            while i < len(holds) and holds[i][2] <= t:
+                i += 1                             # past this hold's end
+            inside = i < len(holds) and holds[i][1] <= t
+            writer.writerow(row + [holds[i][0] if inside else ''])
             n += 1
-    return out_csv, n, len(marks)
+    return out_csv, n, len(holds)
 
 
 if __name__ == '__main__':
     import sys
     if len(sys.argv) != 3 or sys.argv[1] != 'merge':
         raise SystemExit("usage: python recorder.py merge <session.csv>")
-    path, rows, marks = merge_labels(sys.argv[2])
-    print(f"{rows:,} rows, {marks} marks -> {path}")
+    path, rows, holds = merge_labels(sys.argv[2])
+    print(f"{rows:,} rows, {holds} holds -> {path}")
