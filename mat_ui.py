@@ -114,17 +114,17 @@ REC_ON     = '#E5484D'
 # a session without keeping time and count in their head.
 POSES = [
     # name                     button label    target s  reps
-    ('empty',                 'empty',         30,       2),  # start and end
-    ('standing',              'standing',      60,       1),
-    ('standing_eyes_closed',  'eyes closed',   60,       1),
-    ('tree_L',                'tree L',        30,       3),
-    ('tree_R',                'tree R',        30,       3),
-    ('warrior2_L',            'warrior2 L',    30,       3),
-    ('warrior2_R',            'warrior2 R',    30,       3),
-    ('chair',                 'chair',         30,       3),
-    ('warrior2_L_fault',      'W2 L fault',    30,       1),
+    ('empty',                 'empty',         15,       2),  # start and end
+    ('standing',              'standing',      30,       1),
+    ('standing_eyes_closed',  'eyes closed',   30,       1),
+    ('tree_L',                'tree L',        15,       3),
+    ('tree_R',                'tree R',        15,       3),
+    ('warrior2_L',            'warrior2 L',    15,       3),
+    ('warrior2_R',            'warrior2 R',    15,       3),
+    ('chair',                 'chair',         15,       3),
+    ('warrior2_L_fault',      'W2 L fault',    15,       1),
 ]
-REST_S = 30         # step off between holds; the rest timer turns green here
+REST_S = 15         # step off between holds; the rest timer turns green here
 
 # Field values and per-subject rep counts survive a restart. Local to this
 # machine and gitignored — it holds body weights.

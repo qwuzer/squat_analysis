@@ -1,6 +1,6 @@
 # Collection Protocol — First Yoga Dataset
 
-> Six conditions, ~30 minutes per subject. Designed around what the hardware can
+> Six conditions, ~15 minutes per subject. Designed around what the hardware can
 > actually measure, not around what a yoga class would pick.
 
 ---
@@ -49,7 +49,7 @@ available.
 
 - **Down dog / anything hands-and-feet** until the physical mat arrangement is
   settled. Three mats side by side make a wide strip; down dog needs length.
-- **Anything a beginner cannot hold for 20 s.** Falls are not data.
+- **Anything a beginner cannot hold for 15 s.** Falls are not data.
 - **Fine variants within a family.** Our 29% figure says we cannot resolve them.
 
 ### Optional 7th: a deliberate fault
@@ -75,24 +75,30 @@ expensive part of any scoring work.
 
 ### Every session, without exception
 
-**Empty-mat baseline, 30 s, nobody near the mats — at the start *and* the end.**
+**Empty-mat baseline, 15 s, nobody near the mats — at the start *and* the end.**
 
 This is the single most important line in this document. Drift is environmental
 and varies session to session ([`findings.md`](findings.md) §6.5), so a baseline
-is only valid for its own session. It costs 30 seconds and without it no
+is only valid for its own session. It costs 15 seconds and without it no
 position-based metric is ever possible. The end baseline also measures how much
 stretch the session left behind.
 
-**Quiet standing, 60 s**, before the poses. That is the person's own sway floor,
+**Quiet standing, 30 s**, eyes open then eyes closed, before the poses. That is the person's own sway floor,
 which is what thresholds should be set from rather than a fixed constant
 ([`findings.md`](findings.md) §8.1).
 
 ### Per hold
 
-- **30 s**, or 20 s minimum if they cannot manage it. Mark the real start and end.
+- **15 s**, or 10 s minimum if they cannot manage it.
 - **3 holds per condition.** Gives within-subject variance.
-- **Step off for 30 s between holds.** Creep does not reset while loaded; running
+- **Step off for 15 s between holds.** Creep does not reset while loaded; running
   holds back to back means each inherits the last one's drift.
+
+Halved from the original 30 s holds to keep a subject to ~15 minutes. The cost:
+once the transitions in and out are trimmed, a 15 s hold leaves roughly 11 s of
+steady data rather than ~26 s, so per-hold stability estimates are noisier and
+repeatability (ICC) will read somewhat lower. Quiet standing at 30 s is still the
+standard posturography length and loses nothing.
 
 ### Standardise, or it becomes noise
 
@@ -116,16 +122,16 @@ The operator runs the laptop; the subject only follows instructions.
 
    | Key | Condition | Target | Reps |
    | --- | --- | --- | --- |
-   | 1 | empty mat | 30 s | 2 — start and end |
-   | 2 | quiet standing | 60 s | 1 |
-   | 3 | eyes closed | 60 s | 1 |
-   | 4 / 5 | tree L / R | 30 s | 3 each |
-   | 6 / 7 | warrior 2 L / R | 30 s | 3 each |
-   | 8 | chair | 30 s | 3 |
-   | 9 | warrior 2 L, deliberate fault | 30 s | 1 |
+   | 1 | empty mat | 15 s | 2 — start and end |
+   | 2 | quiet standing | 30 s | 1 |
+   | 3 | eyes closed | 30 s | 1 |
+   | 4 / 5 | tree L / R | 15 s | 3 each |
+   | 6 / 7 | warrior 2 L / R | 15 s | 3 each |
+   | 8 | chair | 15 s | 3 |
+   | 9 | warrior 2 L, deliberate fault | 15 s | 1 |
 
 4. The **hold timer** turns green at the target. After Space it becomes a
-   **rest timer**, which turns green at 30 s — that is when to start the next.
+   **rest timer**, which turns green at 15 s — that is when to start the next.
 5. Each button counts its holds (`tree L 2/3`) and turns green when complete,
    so the button row doubles as the session checklist.
 6. Press **Stop**. Closing the window mid-recording also stops cleanly.
@@ -178,8 +184,8 @@ everything downstream inherits it.
 | | |
 | --- | --- |
 | Consent, weigh, measure, brief | 5 min |
-| Empty baseline + quiet standing | 2 min |
-| 6 conditions × 3 holds × (30 s + 30 s rest) | 18 min |
-| End baseline, notes | 2 min |
-| **Per subject** | **~30 min** |
-| 12 subjects | ~6 hours, spread over sessions |
+| Empty baseline + quiet standing, eyes open and closed | 2 min |
+| 16 holds × (15 s + 15 s rest) | 8 min |
+| End baseline, wrap-up | 1 min |
+| **Per subject** | **~15 min** |
+| 12 subjects | ~3 hours, spread over sessions |

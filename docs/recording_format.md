@@ -25,7 +25,7 @@ They are an operator aid only — they are not written to the data.
 | --- | --- |
 | **Session** | time since Record, red while recording |
 | **Hold** | pose, which hold of the target, and elapsed vs target — turns green at the target |
-| **Rest** | after a hold ends, time since — turns green at 30 s |
+| **Rest** | after a hold ends, time since — turns green at 15 s |
 
 | Key | Does |
 | --- | --- |
