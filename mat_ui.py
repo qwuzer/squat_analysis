@@ -1,9 +1,10 @@
 """
 mat_ui.py  —  Yoga mat pressure monitor
 3 mats side-by-side, each with 4 channels in a 2×2 grid.
-COM5 → ch 0-3   (mat 2)
-COM6 → ch 4-7   (mat 1)
-COM7 → ch 8-11  (mat 3)
+COM7 → ch 0-3   → Mat 3
+COM6 → ch 4-7   → Mat 2
+COM5 → ch 8-11  → Mat 1
+(checked by standing on each mat, 2026-10-01; PORTS and MAT_CHANNELS below)
 Run: python mat_ui.py
 """
 
@@ -46,10 +47,14 @@ RAW_MAX    = 16383
 VALIDATE_CHECKSUM = True
 
 # (top-left, top-right, bottom-left, bottom-right)
+# Each list is that mat's channels in (TL, TR, BL, BR) order. Mats 1 and 3
+# were swapped until 2026-10-01: ch 8-11 had been shown as Mat 3 and ch 0-3 as
+# Mat 1, the reverse of the physical mats. Recordings are keyed by channel
+# number, so the raw data is unaffected — only which mat a channel is called.
 MAT_CHANNELS = [
-    [3, 0, 2, 1],
-    [4, 7, 5, 6],
-    [11, 8, 10, 9],
+    [11, 8, 10, 9],    # Mat 1 — COM5
+    [4, 7, 5, 6],      # Mat 2 — COM6
+    [3, 0, 2, 1],      # Mat 3 — COM7
 ]
 MAT_LABELS = ["Mat 1", "Mat 2", "Mat 3"]
 
@@ -123,7 +128,12 @@ POSES = [
     ('warrior2_R',            'warrior2 R',    15,       3),
     ('chair',                 'chair',         15,       3),
     ('warrior2_L_fault',      'W2 L fault',    15,       1),
+    # forearm plank: the condition most likely to show fatigue tremor, so it is
+    # the stability score's best test after eyes-closed. Tremor builds with
+    # fatigue — if 15 s shows too little, this is the one hold worth lengthening
+    ('plank',                 'plank',         15,       3),
 ]
+POSE_KEYS = '1234567890'   # hotkey for each entry in POSES, in order
 REST_S = 15         # step off between holds; the rest timer turns green here
 
 # Field values and per-subject rep counts survive a restart. Local to this
@@ -546,12 +556,16 @@ CHART_W        = 680
 CHART_H        = 380
 ALIGN_H        = 260    # height of the baseline-aligned chart beneath the raw one
 ALIGN_FLOOR    = 200    # min top-of-scale so a flat (all-rest) view isn't all noise
-# one hue family per mat, so a line's colour says which mat it came from
-CHART_COLORS   = [
-    '#1F6FB2', '#4C9BE0', '#0B4A80', '#7DB6EA',   # Mat 1 — ch 0-3
-    '#D9480F', '#F08C3A', '#9C3208', '#F4A96B',   # Mat 2 — ch 4-7
-    '#2B8A3E', '#52B766', '#18612A', '#8BCF99',   # Mat 3 — ch 8-11
+# one hue family per mat, so a line's colour says which mat it came from —
+# keyed off MAT_CHANNELS, so it follows the mat if the channel map changes
+MAT_PALETTES   = [
+    ['#1F6FB2', '#4C9BE0', '#0B4A80', '#7DB6EA'],   # Mat 1 — blues
+    ['#D9480F', '#F08C3A', '#9C3208', '#F4A96B'],   # Mat 2 — oranges
+    ['#2B8A3E', '#52B766', '#18612A', '#8BCF99'],   # Mat 3 — greens
 ]
+CHART_COLORS   = {ch: MAT_PALETTES[m][i]
+                  for m, chans in enumerate(MAT_CHANNELS)
+                  for i, ch in enumerate(sorted(chans))}
 
 
 class RawChart:
@@ -605,7 +619,7 @@ class RawChart:
             x = cv.bbox(t)[2] + 8        # measured, so it holds at any DPI
             for ch in sorted(chans):
                 cv.create_rectangle(x, y - 4, x + 8, y + 4, outline='',
-                                    fill=CHART_COLORS[ch % len(CHART_COLORS)])
+                                    fill=CHART_COLORS[ch])
                 t = cv.create_text(x + 12, y, anchor='w', text=str(ch), fill=FG,
                                    font=(MONO, 8))
                 x = cv.bbox(t)[2] + 10
@@ -661,7 +675,7 @@ class RawChart:
             for j, v in enumerate(hist):
                 pts += [x0 + (x1 - x0) * (j / (CHART_HISTORY - 1)),
                         y1 - (y1 - y0) * ((v - vmin) / span)]
-            cv.create_line(*pts, fill=CHART_COLORS[ch % len(CHART_COLORS)],
+            cv.create_line(*pts, fill=CHART_COLORS[ch],
                            width=1.4)
 
 
@@ -684,7 +698,7 @@ class App:
         root.title('Yoga Mat Monitor')
         root.configure(bg=BG)
         root.resizable(True, True)
-        root.minsize(1120, 760)         # below this the bands/charts would overlap
+        root.minsize(1280, 760)         # narrower clips the row of ten pose buttons
 
         self._build_ui()
 
@@ -692,9 +706,9 @@ class App:
         # Hotkeys are ignored while a text box has focus.
         root.bind('<r>', lambda e: None if self._typing() else
                   (self._align.rezero(), [m.rezero_all() for m in self._mats]))
-        # 1-9 start a hold for that pose, Space ends it
-        for i in range(len(POSES)):
-            root.bind(str(i + 1), lambda e, i=i:
+        # 1-9 and 0 start a hold for that pose, Space ends it
+        for i, key in zip(range(len(POSES)), POSE_KEYS):
+            root.bind(key, lambda e, i=i:
                       None if self._typing() else self._start_hold(i))
         root.bind('<space>', lambda e: None if self._typing() else self._end_hold())
         # closing mid-recording must still close the open hold and write the
@@ -893,6 +907,13 @@ class App:
             font=(FONT, 10, 'bold'), cursor='hand2', padx=8, pady=3,
             command=self._toggle_record)
         self._rec_btn.pack(side='left')
+        self._end_btn = tk.Button(
+            btns, text='\u25a0  End hold  (space)', relief='flat', bd=0,
+            bg=FG, fg='#FFFFFF', activebackground=_blend(FG, '#FFFFFF', 0.2),
+            activeforeground='#FFFFFF', disabledforeground=MUTED,
+            font=(FONT, 10, 'bold'), cursor='hand2', padx=10, pady=3,
+            command=self._end_hold)
+        self._end_btn.pack(side='left', padx=(8, 0))
         self._style_record_btn(False)
 
         self._rec_status = tk.Label(top, text=self._idle_status, bg=CARD,
@@ -902,22 +923,15 @@ class App:
         # one button per protocol condition; the number is its hotkey
         self._pose_btns = []
         for i, (name, label, target, reps) in enumerate(POSES):
-            b = tk.Button(poses, text='', width=11, relief='flat', bd=0,
+            b = tk.Button(poses, text='', width=10, relief='flat', bd=0,
                           font=(FONT, 9), cursor='hand2', padx=4, pady=3,
                           disabledforeground=MUTED,
                           command=lambda i=i: self._start_hold(i))
             b.pack(side='left', padx=(0, 6))
             self._pose_btns.append(b)
-        self._end_btn = tk.Button(
-            poses, text='\u25a0  End hold\nspace', width=11, relief='flat',
-            bd=0, bg=FG, fg='#FFFFFF', activebackground=_blend(FG, '#FFFFFF', 0.2),
-            activeforeground='#FFFFFF', disabledforeground=MUTED,
-            font=(FONT, 9, 'bold'), cursor='hand2', padx=4, pady=3,
-            command=self._end_hold)
-        self._end_btn.pack(side='left', padx=(6, 6))
         tk.Button(poses, text='reset\nreps', width=6, relief='flat', bd=0,
                   bg=CARD, fg=MUTED, activebackground=GRID, font=(FONT, 8),
-                  cursor='hand2', command=self._reset_reps).pack(side='left')
+                  cursor='hand2', command=self._reset_reps).pack(side='right')
 
     def _style_record_btn(self, recording):
         if recording:
@@ -1022,7 +1036,7 @@ class App:
         for i, (name, label, target, reps) in enumerate(POSES):
             b = self._pose_btns[i]
             done = counts.get(name, 0)
-            b.config(text=f'{i + 1}  {label}\n{done}/{reps}',
+            b.config(text=f'{POSE_KEYS[i]}  {label}\n{done}/{reps}',
                      state='normal' if live else 'disabled')
             if self._hold and self._hold['idx'] == i:
                 b.config(bg=ACCENT, fg='#FFFFFF', activebackground=ACCENT,

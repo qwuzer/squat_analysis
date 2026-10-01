@@ -20,6 +20,11 @@ re-examined any number of times without standing on anything.
 
 ## 1. What the recordings found
 
+> **Mat names corrected 2026-10-01.** These recordings were analysed while
+> ch 0–3 was labelled Mat 1 and ch 8–11 Mat 3 — the reverse of the physical
+> mats. The text below uses the corrected names. The CSVs are keyed by channel
+> number, so re-running `mat_log.py analyse` on them prints the corrected names.
+
 60 s of empty mat, all three ports, 100 frames/s, **zero checksum rejects across
 18,000 frames**. Three results, all of which changed how the thresholds should
 be set.
@@ -163,7 +168,7 @@ of lag, and still shorter than the deliberate weight shifts it needs to see.
 
 The margins are deliberately not tight, because **the drift is not reproducible
 between sessions.** Mats 1 and 3 were unloaded in both recordings and still
-changed substantially — Mat 1's spread fell 44 → 21 counts while Mat 3's rose
+changed substantially — Mat 3's spread (ch 0–3) fell 44 → 21 counts while Mat 1's (ch 8–11) rose
 17 → 31. Whatever drives the wander is environmental, not a fixed property of
 each mat, so a threshold fitted exactly to one recording would be wrong on
 another day.
