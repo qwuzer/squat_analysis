@@ -126,17 +126,17 @@ The operator runs the laptop; the subject only follows instructions.
 
 4. The **hold timer** turns green at the target. After Space it becomes a
    **rest timer**, which turns green at 30 s — that is when to start the next.
-5. Each button counts its reps (`tree L 2/3`) and turns green when complete, so
-   the button row doubles as the session checklist.
-6. Something worth recording mid-hold — a wobble, a step-off? Type it in
-   **note** and press Enter, or press `m`.
-7. Press **Stop**. Closing the window mid-recording also stops cleanly.
+5. Each button counts its holds (`tree L 2/3`) and turns green when complete,
+   so the button row doubles as the session checklist.
+6. Press **Stop**. Closing the window mid-recording also stops cleanly.
 
 Rep counts are kept per subject across restarts. **reset reps** clears the
 current subject's counts if a session is being redone.
 
-`python recorder.py merge recordings/<session>.csv` then produces the flat table
-with `pose`, `rep` and `label` columns ([`recording_format.md`](recording_format.md) §3).
+Each hold is saved as one row — `pose, start_s, end_s` — in `<session>_holds.csv`.
+`python recorder.py merge recordings/<session>.csv` adds a `pose` column to the
+signal ([`recording_format.md`](recording_format.md) §2–3). Remember that holds
+include the transitions in and out; trim them at feature extraction.
 
 ---
 

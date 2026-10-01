@@ -9,33 +9,33 @@
 
 Run `python mat_ui.py`. The panel at the bottom has two rows.
 
-**Session fields** — subject, weight, height, experience, and a note box. The
-first four are remembered in `mat_ui_settings.json` (local, gitignored — it holds
-body weights) and restored on the next launch.
+**Session fields** — subject, weight, height, experience. Remembered in
+`mat_ui_settings.json` (local, gitignored — it holds body weights) and restored
+on the next launch.
 
 **Pose buttons** — one per protocol condition. Keys **1–9** start a hold for
 that pose and **Space** ends it. Starting a new pose while one is running ends
-the current one first. Each button shows completed reps against the target, and
-those counts are also remembered per subject.
+the current one first. Each button shows how many holds of that pose are done
+against the target (`tree L 2/3`); those counts are remembered per subject.
+They are an operator aid only — they are not written to the data.
 
 **Timer card** (top right):
 
 | Readout | Shows |
 | --- | --- |
 | **Session** | time since Record, red while recording |
-| **Hold** | pose, rep, and elapsed vs target — turns green at the target |
+| **Hold** | pose, which hold of the target, and elapsed vs target — turns green at the target |
 | **Rest** | after a hold ends, time since — turns green at 30 s |
 
 | Key | Does |
 | --- | --- |
 | `1`–`9` | start a hold |
 | `Space` | end the hold |
-| `m` | note, using the text in the note box (or Enter in that box) |
 | `r` | re-zero the aligned chart |
 
 Hotkeys are ignored while a text box has focus. **Closing the window while
-recording stops the recording first**, so the events file and sidecar are never
-lost.
+recording stops the recording first**, so the hold in progress and the sidecar
+are never lost.
 
 Files land in `recordings/`, which is gitignored.
 
@@ -58,25 +58,48 @@ Three files per session, named `<subject>_<YYYYmmdd>_<HHMMSS>`.
 without modification. `elapsed_s` is there because it is what any analysis
 actually wants, and because comparing the two exposes clock problems.
 
-### `<name>_events.csv` — the labels
+### `<name>_holds.csv` — the labels
 
-`Time`, `elapsed_s`, `pose`, `rep`, `label` — one row per mark.
+One row per hold:
 
-Starting a hold writes a mark with the pose and rep and an empty label; ending
-it writes the same pose and rep with label `end`. A note writes its text as the
-label, carrying the current pose and rep if a hold is running. Files recorded
-before the pose or rep fields existed lack those columns and still merge, with
-them empty.
+```
+pose,start_s,end_s
+empty,0.0076,0.8198
+tree_L,1.1341,2.0612
+tree_R,2.0657,2.5951
+```
+
+`start_s` and `end_s` are on the **same clock as `elapsed_s` in the signal
+file** — both start at 0 when Record is pressed. So a hold is exactly the signal
+rows with `start_s <= elapsed_s < end_s`. Subject and body measurements are in
+the sidecar, so they are not repeated per hold.
+
+Each row is appended the moment its hold ends, so a crash mid-session loses at
+most the hold in progress.
+
+**Why there is no rep column.** A hold's number — the 2nd tree L, say — is
+recoverable by sorting a subject's holds of that pose by start time. It will be
+needed (repeatability across holds 1–3 is the ICC metric), but it is derived,
+not stored.
+
+**These are raw button times.** A hold starts when the operator presses the key,
+i.e. when the subject is *told* to get into the pose, and ends when they are told
+to come out. So the first second or two is the transition in, and the last moment
+is the transition out — both fast, large movements. Feature extraction should
+use a trimmed window, `[start_s + trim, end_s − trim]`; the trim is a
+feature-extraction parameter to tune, which is exactly why it is not baked in
+here.
 
 Labels live **outside** the signal file. In the bicep pipeline `Reps`, `RIR` and
 `actions` are columns bolted onto the signal, which means re-segmenting forces
 regenerating everything downstream and fixing one label means rewriting a signal
-file. Keeping them separate costs nothing now and avoids that.
+file. Keeping them separate costs nothing and avoids that.
 
 ### `<name>.json` — the metadata
 
 Subject, start and stop time, sample rate, column list, the mat→channel map,
-row count, event count, **the git SHA of the code that recorded it**, and
+row count, hold count, subject info (weight, height, experience), **the git
+SHA of the code that recorded it**, and
 per-port frame counts and checksum rejects.
 
 Session metadata in a sidecar rather than repeated on every row is the one place
@@ -85,34 +108,25 @@ later.
 
 ---
 
-## 3. Getting the marks back onto the signal
-
-Marks are **not** a column in the signal file. To produce one:
+## 3. Getting the holds back onto the signal
 
 ```bash
-python recorder.py merge recordings/subj_20260917_173508.csv
+python recorder.py merge recordings/S04_20261001_140319.csv
 ```
 
-That writes `..._labelled.csv` — the same rows plus `pose`, `rep` and `label`
-columns.
-
-A mark applies **from its own timestamp until the next one**, so a held pose is
-the span between two marks. A mark labelled `end` or `-` closes the current span
-without opening a new one.
+That writes `..._labelled.csv` — the same rows plus one `pose` column: the pose of
+the hold a row falls in, or empty between holds.
 
 ```
-  0.0s  ·
-  0.0s  empty   #1
-  1.3s  ·
-  1.7s  tree_L  #1
-  2.8s  ·
-  2.8s  tree_R  #1
-  3.2s  ·
+  0.01s  empty
+  0.82s  ·          (between holds — resting, stepping off)
+  1.14s  tree_L
+  2.07s  tree_R
+  2.60s  ·
 ```
 
-Storing them apart and joining on demand is deliberate: re-labelling never
-rewrites a signal file, two people can label the same session independently so
-agreement can be measured, and tools that want one flat table still get one.
+Recordings made before the holds file existed have an `_events.csv` log
+instead; `merge` reads those too.
 
 ---
 
@@ -152,7 +166,7 @@ A demo session recorded through the real UI:
 | Row rate | 100.0 rows/s against 100 Hz configured |
 | `Time` parsed by the bicep parser | 267 / 267, no NaN |
 | Wall clock vs `elapsed_s` | disagree by 10 ms over the session |
-| Marks | both captured, with their labels and times |
+| Holds | written in order, each ending after it starts; merged spans match |
 | `rows_with_gaps` | 0 |
 
 ---
@@ -164,6 +178,6 @@ A demo session recorded through the real UI:
   in this one.
 - **No video or EMG.** Those need a sync event recorded on every stream; see the
   data platform discussion.
-- **Marks are instants, not spans.** A pose hold is the gap between two marks.
-  If spans turn out to be the common case, that wants a start/stop pair rather
-  than a single key.
+- **No way to discard a bad hold.** If a subject falls 4 s in, the hold is
+  still written and still counts on the button. Delete the row from
+  `_holds.csv` by hand for now.
