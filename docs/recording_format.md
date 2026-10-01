@@ -13,7 +13,7 @@ Run `python mat_ui.py`. The panel at the bottom has two rows.
 `mat_ui_settings.json` (local, gitignored — it holds body weights) and restored
 on the next launch.
 
-**Pose buttons** — one per protocol condition. Keys **1–9** start a hold for
+**Pose buttons** — one per protocol condition. Keys **1–9 and 0** start a hold for
 that pose and **Space** ends it. Starting a new pose while one is running ends
 the current one first. Each button shows how many holds of that pose are done
 against the target (`tree L 2/3`); those counts are remembered per subject.
@@ -29,7 +29,7 @@ They are an operator aid only — they are not written to the data.
 
 | Key | Does |
 | --- | --- |
-| `1`–`9` | start a hold |
+| `1`–`9`, `0` | start a hold |
 | `Space` | end the hold |
 | `r` | re-zero the aligned chart |
 

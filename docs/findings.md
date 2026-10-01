@@ -211,13 +211,13 @@ recording would flicker constantly on a fidgetier day.
 | # | Problem | Impact |
 | --- | --- | --- |
 | 8.1 | **The noise floor is the person, and it varies 3× between sessions** | No fixed threshold is correct for everyone on every day |
-| 8.2 | **Mat 1 is about 2× noisier than Mat 2** in every recording (181 vs 84 counts/s at a 1.0 s window) | One global deadband cannot serve all three mats |
+| 8.2 | **Mat 3 (ch 0–3, COM7) is about 2× noisier than Mat 2** in every recording (181 vs 84 counts/s at a 1.0 s window). Reported as "Mat 1" before the 2026-10-01 relabel | One global deadband cannot serve all three mats |
 | 8.3 | **The arrow goes blank when the person holds still** | It cannot score a held pose, only transitions |
 | 8.4 | **Drift cancellation stops at the mat boundary** | Cross-mat poses (warrior 2, lunge) lose it |
 | 8.5 | **Bands integrate over their area** | Two feet in one band are indistinguishable; left/right becomes unmeasurable |
 | 8.6 | **Sensor linearity is unknown** | Blocks every load-fraction metric |
 | 8.7 | **The slope window counts UI frames, not sensor samples** | Harmless at 100 fps, but a slow port would silently under-report every slope |
-| 8.8 | **The file header contradicts the code** on which port feeds which channels | We may be labelling the wrong mat. Not yet checked against the wiring |
+| 8.8 | ~~**The file header contradicts the code** on which port feeds which channels~~ | **Resolved 2026-10-01.** Checked by standing on each mat: Mats 1 and 3 were swapped. Now COM5 → ch 8–11 → Mat 1, COM6 → ch 4–7 → Mat 2, COM7 → ch 0–3 → Mat 3. Raw data is keyed by channel, so nothing recorded is affected — only the names |
 
 ## 9. What we are missing
 
@@ -227,7 +227,7 @@ recording would flicker constantly on a fidgetier day.
 | --- | --- |
 | **Linearity test** (`mat_log.py linearity --weights 2 2 --body-kg N`) | The bands are known to be *matched* (equal force gives equal readings) but not known to be *linear* (double force gives double reading). Matched is enough for symmetry. Linear is required before "62 % on your front foot" means anything. Needs two known weights — the first version of this test could not detect anything, because moving a foot between bands leaves the pressure under that foot unchanged |
 | **Dead-weight recording** | A dead weight gives pure sensor creep. A standing person gives creep **plus** sway. The difference isolates the sway, which tells us which one sets the floor |
-| **Port-to-mat wiring check** | Resolves 8.8 |
+| ~~Port-to-mat wiring check~~ | Done — see 8.8 |
 
 ### 9.2 Features not yet built
 

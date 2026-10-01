@@ -1,6 +1,6 @@
 # Collection Protocol — First Yoga Dataset
 
-> Six conditions, ~15 minutes per subject. Designed around what the hardware can
+> Seven conditions, ~16 minutes per subject. Designed around what the hardware can
 > actually measure, not around what a yoga class would pick.
 
 ---
@@ -16,6 +16,7 @@
 | 4 | **Warrior 2, left forward** | 2 feet, wide | Front/back + left/right asymmetry, spans mats |
 | 5 | **Warrior 2, right forward** | 2 feet, wide | Bilateral pair with #4 |
 | 6 | **Chair** (Utkatasana) | 2 feet, together | Front/back shift, and it fatigues |
+| 7 | **Forearm plank** | forearms + feet, across mats | The jitter condition — see below |
 
 ### Why these
 
@@ -45,10 +46,26 @@ with eyes closed, it is not measuring balance. One minute per subject, within
 subject, so it needs no extra people, and it is the most decisive validity test
 available.
 
+### Why plank
+
+Plank is the condition most likely to produce **fatigue tremor** — the visible
+jitter of a muscle near its limit. That makes it the stability score's best test
+after eyes-closed: if the score cannot tell a plank from quiet standing, it is not
+measuring steadiness.
+
+Standardise it: **forearm plank**, elbows under shoulders, body straight, forearms
+on one mat and feet on another along the row. It is ~1.5 m long, so **check it
+fits the layout before the pilot**.
+
+Tremor builds with fatigue, so a fresh subject may show little in 15 s. If the
+pilot shows plank barely jittering, plank is the one hold worth lengthening — it
+is a single number in `POSES`.
+
 ### Deliberately excluded
 
-- **Down dog / anything hands-and-feet** until the physical mat arrangement is
-  settled. Three mats side by side make a wide strip; down dog needs length.
+- **Down dog.** Like plank it needs length along the mats, but its load sits on
+  hands and feet at a steep angle that is hard to standardise. Plank covers the
+  hands-and-feet family for now.
 - **Anything a beginner cannot hold for 15 s.** Falls are not data.
 - **Fine variants within a family.** Our 29% figure says we cannot resolve them.
 
@@ -129,6 +146,7 @@ The operator runs the laptop; the subject only follows instructions.
    | 6 / 7 | warrior 2 L / R | 15 s | 3 each |
    | 8 | chair | 15 s | 3 |
    | 9 | warrior 2 L, deliberate fault | 15 s | 1 |
+   | 0 | forearm plank | 15 s | 3 |
 
 4. The **hold timer** turns green at the target. After Space it becomes a
    **rest timer**, which turns green at 15 s — that is when to start the next.
@@ -170,7 +188,7 @@ What to check before scaling up:
 | Check | Why |
 | --- | --- |
 | Do the bilateral pairs mirror? | Hardware/layout validity |
-| Can you tell the six conditions apart at all, by eye, on the charts? | If not, no model will either |
+| Can you tell the conditions apart at all, by eye, on the charts? | If not, no model will either |
 | Per-port frame counts in the sidecars ≈ `rate_hz × duration` | The 100 Hz grid was not undersampling |
 | Does sway rank the way experience predicts? | Sanity check on the stability measure |
 
@@ -185,7 +203,7 @@ everything downstream inherits it.
 | --- | --- |
 | Consent, weigh, measure, brief | 5 min |
 | Empty baseline + quiet standing, eyes open and closed | 2 min |
-| 16 holds × (15 s + 15 s rest) | 8 min |
+| 19 holds × (15 s + 15 s rest) | 9.5 min |
 | End baseline, wrap-up | 1 min |
-| **Per subject** | **~15 min** |
-| 12 subjects | ~3 hours, spread over sessions |
+| **Per subject** | **~16 min** |
+| 12 subjects | ~3.5 hours, spread over sessions |
