@@ -143,7 +143,8 @@ and whose sample-to-sample change we measured at 0.8–2.7 counts
 
 The alternative, logging every frame in long format, is lossless but does not
 match what downstream tooling expects. The compromise is that the sidecar
-records each port's true frame count, so the assumption is **checkable**:
+records each port's true frame count **from Record to Stop**, so the assumption
+is **checkable**:
 
 ```json
 "ports": {"COM7": {"frames": 5998, "bad_checksum": 0, "status": "ok"}}
@@ -151,6 +152,11 @@ records each port's true frame count, so the assumption is **checkable**:
 
 If a port's frame count is far from `rate_hz × duration_s`, the grid was
 undersampling it and the recording should be treated with suspicion.
+
+Recordings made before 2026-10-01 counted from app launch instead, so their
+frame counts are too high and this check does not apply to them. The signal
+itself is still checkable: `rows / duration` and the longest run of identical
+rows per port.
 
 `rows_with_gaps` counts grid ticks where some channel had no value yet — nonzero
 only at the very start, or if a port drops out mid-session.
