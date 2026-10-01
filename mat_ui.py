@@ -1069,6 +1069,8 @@ class App:
             self._flash = None
         else:
             f = {k: w.get() for k, w in self._fields.items()}
+            self._frames0 = {r.port: (r.frames, r.bad)
+                             for r in getattr(self, '_readers', [])}
             path = self._recorder.start(RECORD_DIR, self._subject_name(), meta={
                 'mat_channels': {MAT_LABELS[i]: chans
                                  for i, chans in enumerate(MAT_CHANNELS)},
@@ -1140,7 +1142,12 @@ class App:
         self._show(self._rec_status, text, colour)
 
     def _port_stats(self):
-        return {r.port: {'frames': r.frames, 'bad_checksum': r.bad,
+        # The readers count from app launch; subtract the counts taken at Record
+        # so the sidecar describes this recording — frames should then come out
+        # close to rate_hz x duration_s.
+        base = getattr(self, '_frames0', {})
+        return {r.port: {'frames': r.frames - base.get(r.port, (0, 0))[0],
+                         'bad_checksum': r.bad - base.get(r.port, (0, 0))[1],
                          'status': r.status}
                 for r in getattr(self, '_readers', [])}
 
