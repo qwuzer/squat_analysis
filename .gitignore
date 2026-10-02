@@ -2,8 +2,9 @@ __pycache__/
 *.pyc
 profiles.json
 
-# measurement output
+# measurement output — video identifies subjects, never commit it
 *.csv
+*.mp4
 recordings/
 
 # reference papers, kept locally

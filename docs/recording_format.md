@@ -43,7 +43,8 @@ Files land in `recordings/`, which is gitignored.
 
 ## 2. What gets written
 
-Three files per session, named `<subject>_<YYYYmmdd>_<HHMMSS>`.
+Three files per session, named `<subject>_<YYYYmmdd>_<HHMMSS>` — five with a
+camera.
 
 ### `<name>.csv` — the signal
 
@@ -105,6 +106,61 @@ per-port frame counts and checksum rejects.
 Session metadata in a sidecar rather than repeated on every row is the one place
 this departs from the old pipeline. It is also the shape a database would ingest
 later.
+
+When a camera is configured the sidecar also has a `video` block: file name,
+status (`ok`, or the error that stopped it), fps, size, frames written and
+captured, and `first_tick_s`.
+
+### `<name>.mp4` and `<name>_frames.csv` — the video
+
+Recorded by `video.py` when `VIDEO_CAMERA` is set in `mat_ui.py`. Starts with
+Record and stops with it.
+
+```
+frame,elapsed_s,capture_s
+0,4.1321,4.1321
+1,4.1655,4.1321
+```
+
+| Column | |
+| --- | --- |
+| `frame` | index into the mp4 |
+| `elapsed_s` | the frame's time, **same clock as the signal file** |
+| `capture_s` | when that picture arrived from the camera |
+
+The video is written on a **fixed 30 fps grid**, the same idea as the 100 Hz
+signal grid: each tick gets the newest picture that had arrived by then. A slow
+camera therefore repeats frames rather than making the file play fast, so the
+mp4 plays at true speed and frame *k* is at `first_tick_s + k / 30`. Two rows
+with the same `capture_s` are the same picture.
+
+**GoPro setup.** A HERO11 Black on USB, with GoPro's free *GoPro Webcam*
+desktop app running, appears as camera 1 (camera 0 is the laptop's own). On
+Record, `video.py` asks the camera to start streaming over its USB network link
+(`172.2X.1YZ.51`). It only records once the picture is **live** — the app's
+black screen and GoPro logo card are both perfectly still, a real camera never
+is. Starting the stream is not yet reliable: after one working test the app sat
+on its logo card even though the camera reported it was streaming. Until that
+is sorted, open the app's preview before a session and check the picture moves.
+
+To see the video at a moment in the mat data: find the row in `_frames.csv`
+with the nearest `elapsed_s`, and seek to that frame.
+
+**The camera starts a few seconds after Record** (opening it takes 2–4 s), so
+the first moments of the session — the empty-mat baseline — have no video.
+Nothing needs filming there.
+
+**`capture_s` is when the picture reached the laptop, not when it was taken.**
+The webcam path adds a fixed delay of roughly 0.1–0.3 s. Measure it once — a
+stomp shows as a spike in the mat data and in the video — and subtract it at
+analysis.
+
+**The camera can never stop a mat recording.** If it will not open or gives no
+live picture, the mat data records as normal, the header pill turns red with
+the reason, and the sidecar records why there is no video.
+
+Video identifies subjects; pressure data does not. Video files are gitignored,
+and consent for video has to be in the consent form.
 
 ---
 
