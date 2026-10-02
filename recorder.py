@@ -124,8 +124,9 @@ class Recorder:
         self.holds += 1
         return True
 
-    def stop(self, port_stats=None):
-        """Stop, write the sidecars, and return the metadata that was written."""
+    def stop(self, port_stats=None, extra=None):
+        """Stop, write the sidecars, and return the metadata that was written.
+        `extra` is merged into the JSON, e.g. what the video recorder reports."""
         if not self.active:
             return None
         self._stop.set()
@@ -138,6 +139,7 @@ class Recorder:
             'holds': self.holds,
             'ports': port_stats or {},
         })
+        self._meta.update(extra or {})
         base = self.path[:-4]
         with open(base + '.json', 'w', encoding='utf-8') as fh:
             json.dump(self._meta, fh, indent=2, ensure_ascii=False)

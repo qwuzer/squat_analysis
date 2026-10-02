@@ -19,6 +19,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from recorder import Recorder
+from video import VideoRecorder
 
 try:
     import serial
@@ -111,6 +112,14 @@ RECORD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           'recordings')
 RECORD_HZ  = 100    # matches what the mats actually emit
 REC_ON     = '#E5484D'
+
+# Camera recorded alongside the mats, on the same clock — see video.py. The
+# index is the order Windows lists cameras in; on the lab laptop 0 is the
+# built-in webcam and 1 is the GoPro. None turns video off. If the camera
+# cannot be opened the mat recording carries on without it.
+VIDEO_CAMERA = 1
+VIDEO_FPS    = 30
+VIDEO_SIZE   = (1280, 720)   # written size — enough to see the pose, ~25 MB/min
 
 # ── session presets ───────────────────────────────────────────────────────────
 # The conditions from docs/collection_protocol.md. Keys 1-9 start a hold and
@@ -687,6 +696,8 @@ class App:
         self._data = {}
         self._demo = not HAS_SERIAL
         self._recorder = Recorder(self._data, range(4 * len(PORTS)), RECORD_HZ)
+        self._video = (None if VIDEO_CAMERA is None else
+                       VideoRecorder(VIDEO_CAMERA, VIDEO_FPS, VIDEO_SIZE))
         self._settings = self._load_settings()
         self._hold     = None     # {'idx', 'name', 'rep', 'start'}; rep is the
                                   # operator's counter only, it is not saved
@@ -838,7 +849,7 @@ class App:
         pills = tk.Frame(head, bg=CARD)
         pills.pack(side='right', padx=10)
         self._pills, self._pill_state = {}, {}
-        for name in (['demo'] if self._demo else PORTS):
+        for name in (['demo'] if self._demo else PORTS) + ['camera']:
             self._pills[name] = tk.Label(pills, text='', bg=CARD, fg=MUTED,
                                          font=(FONT, 9), padx=8)
             self._pills[name].pack(side='left')
@@ -1061,11 +1072,16 @@ class App:
     def _toggle_record(self):
         if self._recorder.active:
             self._end_hold()
-            meta = self._recorder.stop(self._port_stats())
+            video = self._video.stop() if self._video else None
+            meta = self._recorder.stop(self._port_stats(), extra={'video': video})
             self._style_record_btn(False)
             self._idle_status = (f"saved {os.path.basename(self._recorder.path)}"
                                  f"  \u00b7  {meta['rows']:,} rows, "
                                  f"{meta['holds']} holds")
+            if video and video['status'] == 'ok':
+                self._idle_status += f", {video['frames_written']:,} video frames"
+            elif video:
+                self._idle_status += '  \u00b7  no video'
             self._flash = None
         else:
             f = {k: w.get() for k, w in self._fields.items()}
@@ -1081,6 +1097,8 @@ class App:
                                  'height_cm': _num(f['height_cm']),
                                  'experience': f['experience'] or None},
             })
+            if self._video:
+                self._video.start(path[:-4], lambda: self._recorder.elapsed)
             self._style_record_btn(True)
             self._last_end = None
             self._say(f'recording to {os.path.basename(path)}')
@@ -1151,6 +1169,18 @@ class App:
                          'status': r.status}
                 for r in getattr(self, '_readers', [])}
 
+    def _camera_pill(self):
+        v = self._video
+        if v is None:
+            return 'camera off', MUTED
+        if v.status == 'recording':
+            return f'camera · {v.written:,} frames', OK_COL
+        if v.status == 'starting':
+            return 'camera starting', WARN_COL
+        if v.status.startswith('error'):
+            return 'camera · ' + v.status[7:47], ERR_COL
+        return f'camera {v.index} · on Record', MUTED
+
     def _poll(self):
         if self._demo:
             self._driver.step()
@@ -1194,6 +1224,7 @@ class App:
                 if r.bad:
                     text += f' · {r.bad} bad'
                 self._set_pill(r.port, text, colour)
+        self._set_pill('camera', *self._camera_pill())
 
         self.root.after(UPDATE_MS, self._poll)
 
