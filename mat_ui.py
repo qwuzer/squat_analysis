@@ -19,7 +19,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from recorder import Recorder
-from video import Camera
+from video import GOPRO, Camera
 
 try:
     import serial
@@ -113,15 +113,13 @@ RECORD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 RECORD_HZ  = 100    # matches what the mats actually emit
 REC_ON     = '#E5484D'
 
-# Camera previewed in the weight-shift card and recorded alongside the mats,
-# on the same clock — see video.py. The index is the order Windows lists
-# cameras in; on the lab laptop 0 is the built-in webcam and 1 is the GoPro.
-# None turns video off. If the camera cannot be opened the mat recording
-# carries on without it.
-VIDEO_CAMERA = 1
+# Camera recorded alongside the mats, on the same clock — see video.py. GOPRO
+# reads the USB GoPro directly (quit GoPro's Webcam app first, it holds the
+# stream's port); a number is a webcam index (0 = the laptop's own). None turns
+# video off. If the camera cannot be opened the mat recording carries on.
+VIDEO_CAMERA = GOPRO
 VIDEO_FPS    = 30
 VIDEO_SIZE   = (1280, 720)   # written size — enough to see the pose, ~25 MB/min
-PREVIEW_MS   = 100           # preview refresh; 10 fps is plenty to frame a shot
 
 # ── session presets ───────────────────────────────────────────────────────────
 # The conditions from docs/collection_protocol.md. Keys 1-9 start a hold and
@@ -740,7 +738,6 @@ class App:
 
         if self._video:
             self._video.open()
-            self._preview_loop()
         self._poll()
 
     def _build_ui(self):
@@ -794,19 +791,6 @@ class App:
         self._rate_lbl.pack(anchor='w')
         tk.Frame(readout, bg=CARD).pack(expand=True, fill='both')
         self._shown = None
-
-        # camera preview in the rest of the card. A fixed-size canvas would
-        # set the card's height; this one only takes the space it is given.
-        self._preview = tk.Canvas(arrow.body, bg=TILE, highlightthickness=0,
-                                  bd=0, width=1, height=1)
-        self._preview.pack(side='right', fill='both', expand=True, padx=(16, 0))
-        self._preview_img = None
-        self._preview_id  = None
-        self._preview_msg = self._preview.create_text(
-            0, 0, text='no camera' if VIDEO_CAMERA is None else 'camera opening',
-            fill=MUTED, font=(FONT, 9))
-        self._preview.bind('<Configure>', lambda e: self._preview.coords(
-            self._preview_msg, e.width / 2, e.height / 2))
 
         self._build_timer_card(right)
 
@@ -1201,45 +1185,6 @@ class App:
         if v.recording:
             return f'camera · {v.written:,} frames', OK_COL
         return 'camera live', OK_COL
-
-    def _preview_loop(self):
-        """Draw the newest camera picture, letterboxed to the canvas."""
-        try:
-            self._draw_preview()
-        finally:
-            self.root.after(PREVIEW_MS, self._preview_loop)
-
-    def _draw_preview(self):
-        import cv2
-        v, c = self._video, self._preview
-        w, h = c.winfo_width(), c.winfo_height()
-        frame = v.frame
-        if frame is None or w < 40 or h < 30:
-            c.itemconfigure(self._preview_msg, text=f'camera {v.status}')
-            return
-        if v.frame_id == getattr(self, '_preview_seen', None) \
-                and (w, h) == getattr(self, '_preview_wh', None):
-            return                                  # nothing new to draw
-        self._preview_seen, self._preview_wh = v.frame_id, (w, h)
-        fh, fw = frame.shape[:2]
-        k = min(w / fw, h / fh)
-        img = cv2.resize(frame, (max(1, int(fw * k)), max(1, int(fh * k))),
-                         interpolation=cv2.INTER_AREA)
-        ok, ppm = cv2.imencode('.ppm', img)
-        if not ok:
-            return
-        self._preview_img = tk.PhotoImage(data=ppm.tobytes())
-        if self._preview_id is None:
-            self._preview_id = c.create_image(w / 2, h / 2,
-                                              image=self._preview_img)
-        else:
-            c.coords(self._preview_id, w / 2, h / 2)
-            c.itemconfigure(self._preview_id, image=self._preview_img)
-        # the status sits over the picture only when it is not live
-        live = v.status == 'live'
-        c.itemconfigure(self._preview_msg, text='' if live else
-                        f'camera {v.status}', fill='#FFFFFF')
-        c.tag_raise(self._preview_msg)
 
     def _poll(self):
         if self._demo:

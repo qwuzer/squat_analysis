@@ -1,11 +1,16 @@
 """
-video.py — camera preview and recording alongside the mats.
+video.py — camera recording alongside the mats.
 
-A GoPro (HERO9+) on USB, with GoPro's Webcam desktop app running, shows up as
-an ordinary webcam. The camera is opened when the app starts and read for as
-long as it runs, so the UI always has a preview and Record starts filming at
-once. While recording, it writes next to the mat data, on the mat recorder's
-clock:
+The GoPro (HERO9+, on USB) is read directly: asked over its USB network link to
+start webcam streaming, it sends an MPEG-TS stream to UDP port 8554 on this
+computer, which OpenCV decodes. GoPro's own Webcam desktop app is not used —
+it sat on a black screen or its logo card while the camera was streaming, and
+it would hold port 8554, so **quit it before running the mat app**. Any other
+webcam can be used by its index instead.
+
+The camera is opened when the app starts and read for as long as it runs, so
+Record starts filming at once (opening the GoPro stream takes ~7 s). While
+recording, it writes next to the mat data, on the mat recorder's clock:
 
     <name>.mp4           the video, on a fixed FPS grid, so it plays at true speed
     <name>_frames.csv    frame, elapsed_s, capture_s
@@ -17,9 +22,9 @@ first_tick_s + k / FPS); `capture_s` is when that frame actually arrived, so
 repeats are visible — two rows with the same capture_s are the same picture.
 
 capture_s is when the frame reached this program, not when the light hit the
-sensor. The webcam path adds a fixed delay (roughly 0.1–0.3 s) that this does
-not remove. Measure it once with a stomp — a spike in the mat data and a
-visible frame — and subtract it at analysis.
+sensor. The stream adds a fixed delay that this does not remove. Measure it once
+with a stomp — a spike in the mat data and a visible frame — and subtract it at
+analysis.
 
 The camera is optional. If it cannot be opened, the mat recording carries on
 and the sidecar says why there is no video.
@@ -33,6 +38,11 @@ import socket
 import threading
 import time
 import urllib.request
+
+# FFmpeg options for the GoPro stream: hand frames over as they arrive rather
+# than buffering. Must be set before cv2 is imported.
+os.environ.setdefault('OPENCV_FFMPEG_CAPTURE_OPTIONS',
+                      'fflags;nobuffer|flags;low_delay|threads;2')
 
 try:
     import cv2
@@ -58,30 +68,53 @@ def gopro_url():
     return None
 
 
-def gopro_webcam_start(url, res=12, fov=0, timeout=3.0):
-    """Ask the camera to start streaming as a webcam. res 12 = 1080p, 7 = 720p;
-    fov 0 = wide. Returns the camera's reply, or raises on no answer."""
-    q = f'{url}/gopro/webcam/start?res={res}&fov={fov}'
-    return json.loads(urllib.request.urlopen(q, timeout=timeout).read() or b'{}')
+GOPRO = 'gopro'          # pass as the camera source to read the GoPro directly
+GOPRO_PORT = 8554
+# timeout is in microseconds: a stalled stream ends the read so it can restart
+GOPRO_STREAM = (f'udp://@0.0.0.0:{GOPRO_PORT}'
+                '?overrun_nonfatal=1&fifo_size=50000000&timeout=5000000')
+
+
+def port_free(port):
+    """True if nothing else (e.g. GoPro's Webcam app) holds this UDP port."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.bind(('0.0.0.0', port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def gopro_webcam_start(url, res=7, fov=0, timeout=3.0):
+    """Ask the camera to (re)start streaming as a webcam. res 7 = 720p,
+    12 = 1080p; fov 0 = wide. Raises if the camera does not answer.
+
+    720p by default: the video is saved at 720p anyway, and decoding a 1080p
+    stream takes enough CPU to make the UI stutter. A stream already running
+    keeps its old resolution, so it is stopped first.
+    """
+    def get(path):
+        return json.loads(urllib.request.urlopen(url + path, timeout=timeout)
+                          .read() or b'{}')
+    get('/gopro/webcam/stop')
+    return get(f'/gopro/webcam/start?res={res}&fov={fov}')
 
 
 class Camera:
-    """One camera, read continuously: a live preview frame at all times, and
-    an mp4 on a fixed grid while recording."""
+    """One camera, read continuously from app start; an mp4 on a fixed grid
+    while recording."""
 
     LIVE_WINDOW  = 2.0  # s; live = at least LIVE_CHANGES picture changes
     LIVE_CHANGES = 5    #    within the last LIVE_WINDOW seconds
-    ASK_EVERY    = 10.0 # s between requests to a GoPro that is not streaming
-    REOPEN_S    = 3.0   # s between attempts when the camera is missing
+    REOPEN_S     = 3.0  # s between attempts when the camera is missing
 
-    def __init__(self, index, fps=30, size=(1280, 720), gopro=True):
-        self.index  = index
+    def __init__(self, source=GOPRO, fps=30, size=(1280, 720)):
+        self.source = source          # GOPRO, or a webcam index
         self.fps    = fps
         self.size   = size            # written size; frames are resized to it
-        self.gopro  = gopro
         self.status = 'off'           # off | opening | live | not live | error: ...
-        self.frame  = None            # newest picture, for the preview
-        self.frame_id = 0             # bumps with every new picture
         self._lock  = threading.Lock()
         self._rec   = None            # recording state while recording
         self._closed = threading.Event()
@@ -149,7 +182,7 @@ class Camera:
             'status': status,
             'fps': self.fps,
             'size': list(self.size),
-            'camera_index': self.index,
+            'camera': self.source,
             'frames_written': r['written'],
             'frames_captured': r['captured'],
             'repeated_ticks': r['repeats'],
@@ -162,40 +195,65 @@ class Camera:
     def _run(self):
         while not self._closed.is_set():
             self.status = 'opening'
-            cap = cv2.VideoCapture(self.index, cv2.CAP_DSHOW)
-            if not cap.isOpened():
-                self.status = f'error: camera {self.index} would not open'
+            cap = self._open_gopro() if self.source == GOPRO \
+                else self._open_webcam()
+            if cap is None:
                 self._closed.wait(self.REOPEN_S)
                 continue
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
             self._read(cap)
             cap.release()
             if not self._closed.is_set():
                 self.status = 'error: camera lost'
                 self._closed.wait(self.REOPEN_S)
 
+    def _open_webcam(self):
+        cap = cv2.VideoCapture(self.source, cv2.CAP_DSHOW)
+        if not cap.isOpened():
+            self.status = f'error: camera {self.source} would not open'
+            return None
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+        return cap
+
+    def _open_gopro(self):
+        url = gopro_url()
+        if url is None:
+            self.status = 'error: no GoPro on USB'
+            return None
+        if not port_free(GOPRO_PORT):
+            self.status = 'error: port 8554 busy, quit GoPro Webcam app'
+            return None
+        try:
+            gopro_webcam_start(url)
+        except Exception:
+            self.status = 'error: GoPro not answering'
+            return None
+        cap = cv2.VideoCapture(GOPRO_STREAM, cv2.CAP_FFMPEG)
+        if not cap.isOpened():
+            self.status = 'error: no stream from GoPro'
+            return None
+        return cap
+
     def _read(self, cap):
         """Read until the camera fails or the app closes."""
         prev, changes = None, []        # times the picture changed, last 2 s
-        fails, asked_at = 0, None
-        opened_at = time.monotonic()
+        fails = 0
         while not self._closed.is_set():
             ok, f = cap.read()                  # blocks until the next frame
             now = time.monotonic()
             if not ok:
+                # a GoPro read only fails after its 5 s stream timeout, so
+                # a few failures in a row means the stream is gone: reopen
                 fails += 1
-                if fails > 30:
+                if fails > 3:
                     return
                 time.sleep(0.05)
                 continue
             fails = 0
 
-            # Live means the picture changes. With no stream, GoPro's virtual
-            # webcam sends black or its logo card — both perfectly still; a
-            # real camera never repeats a frame exactly (sensor noise). Several
-            # changes are needed, because the switch from black to the logo
-            # card is itself one change.
+            # Live means the picture changes. A stalled source repeats one
+            # picture exactly; a real camera never does (sensor noise).
+            # Several changes are needed so a single cut does not count.
             small = cv2.resize(f, (160, 90))
             if prev is not None and cv2.absdiff(small, prev).any():
                 changes.append(now)
@@ -204,27 +262,9 @@ class Camera:
             live = len(changes) >= self.LIVE_CHANGES
             self.status = 'live' if live else 'not live'
 
-            # The GoPro streams only once asked. Ask after giving an already-
-            # streaming camera a moment to show itself, and again every
-            # ASK_EVERY seconds while there is still no live picture.
-            if self.gopro and not live and now - opened_at > 3 and \
-                    (asked_at is None or now - asked_at > self.ASK_EVERY):
-                asked_at = now
-                threading.Thread(target=self._ask_gopro, daemon=True).start()
-
             with self._lock:
-                self.frame, self.frame_id = f, self.frame_id + 1
                 if self._rec is not None:
                     self._write(self._rec, f, live)
-
-    @staticmethod
-    def _ask_gopro():
-        url = gopro_url()
-        if url:
-            try:
-                gopro_webcam_start(url)
-            except Exception:
-                pass
 
     def _write(self, r, f, live):
         """Called with each new picture while recording (under the lock)."""
