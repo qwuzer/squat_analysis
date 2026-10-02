@@ -113,8 +113,11 @@ captured, and `first_tick_s`.
 
 ### `<name>.mp4` and `<name>_frames.csv` — the video
 
-Recorded by `video.py` when `VIDEO_CAMERA` is set in `mat_ui.py`. Starts with
-Record and stops with it.
+Recorded by `video.py` when `VIDEO_CAMERA` is set in `mat_ui.py`. The camera
+is opened when the app starts and **previewed in the Weight shift card**, so the
+shot can be framed before Record. Writing starts with Record and stops with it.
+The header pill says `camera live` when the picture is moving, and counts frames
+while recording.
 
 ```
 frame,elapsed_s,capture_s
@@ -135,20 +138,20 @@ mp4 plays at true speed and frame *k* is at `first_tick_s + k / 30`. Two rows
 with the same `capture_s` are the same picture.
 
 **GoPro setup.** A HERO11 Black on USB, with GoPro's free *GoPro Webcam*
-desktop app running, appears as camera 1 (camera 0 is the laptop's own). On
-Record, `video.py` asks the camera to start streaming over its USB network link
-(`172.2X.1YZ.51`). It only records once the picture is **live** — the app's
-black screen and GoPro logo card are both perfectly still, a real camera never
-is. Starting the stream is not yet reliable: after one working test the app sat
-on its logo card even though the camera reported it was streaming. Until that
-is sorted, open the app's preview before a session and check the picture moves.
+desktop app running, appears as camera 1 (camera 0 is the laptop's own). While
+there is no live picture, `video.py` asks the camera to start streaming over its
+USB network link (`172.2X.1YZ.51`), every 10 s. It only records a **live**
+picture — at least 5 changes in 2 s. The app's black screen and GoPro logo card
+are both perfectly still; a real camera never is. Starting the stream is not
+yet reliable: after one working test the app sat on its logo card even though
+the camera reported it was streaming. **Check the preview is moving before
+every session.**
 
 To see the video at a moment in the mat data: find the row in `_frames.csv`
 with the nearest `elapsed_s`, and seek to that frame.
 
-**The camera starts a few seconds after Record** (opening it takes 2–4 s), so
-the first moments of the session — the empty-mat baseline — have no video.
-Nothing needs filming there.
+If the camera is not live when Record is pressed, video starts when it becomes
+live, and `first_tick_s` says when.
 
 **`capture_s` is when the picture reached the laptop, not when it was taken.**
 The webcam path adds a fixed delay of roughly 0.1–0.3 s. Measure it once — a

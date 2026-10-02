@@ -19,7 +19,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from recorder import Recorder
-from video import VideoRecorder
+from video import Camera
 
 try:
     import serial
@@ -113,13 +113,15 @@ RECORD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 RECORD_HZ  = 100    # matches what the mats actually emit
 REC_ON     = '#E5484D'
 
-# Camera recorded alongside the mats, on the same clock — see video.py. The
-# index is the order Windows lists cameras in; on the lab laptop 0 is the
-# built-in webcam and 1 is the GoPro. None turns video off. If the camera
-# cannot be opened the mat recording carries on without it.
+# Camera previewed in the weight-shift card and recorded alongside the mats,
+# on the same clock — see video.py. The index is the order Windows lists
+# cameras in; on the lab laptop 0 is the built-in webcam and 1 is the GoPro.
+# None turns video off. If the camera cannot be opened the mat recording
+# carries on without it.
 VIDEO_CAMERA = 1
 VIDEO_FPS    = 30
 VIDEO_SIZE   = (1280, 720)   # written size — enough to see the pose, ~25 MB/min
+PREVIEW_MS   = 100           # preview refresh; 10 fps is plenty to frame a shot
 
 # ── session presets ───────────────────────────────────────────────────────────
 # The conditions from docs/collection_protocol.md. Keys 1-9 start a hold and
@@ -697,7 +699,7 @@ class App:
         self._demo = not HAS_SERIAL
         self._recorder = Recorder(self._data, range(4 * len(PORTS)), RECORD_HZ)
         self._video = (None if VIDEO_CAMERA is None else
-                       VideoRecorder(VIDEO_CAMERA, VIDEO_FPS, VIDEO_SIZE))
+                       Camera(VIDEO_CAMERA, VIDEO_FPS, VIDEO_SIZE))
         self._settings = self._load_settings()
         self._hold     = None     # {'idx', 'name', 'rep', 'start'}; rep is the
                                   # operator's counter only, it is not saved
@@ -736,6 +738,9 @@ class App:
                 r.start()
                 self._readers.append(r)
 
+        if self._video:
+            self._video.open()
+            self._preview_loop()
         self._poll()
 
     def _build_ui(self):
@@ -789,6 +794,19 @@ class App:
         self._rate_lbl.pack(anchor='w')
         tk.Frame(readout, bg=CARD).pack(expand=True, fill='both')
         self._shown = None
+
+        # camera preview in the rest of the card. A fixed-size canvas would
+        # set the card's height; this one only takes the space it is given.
+        self._preview = tk.Canvas(arrow.body, bg=TILE, highlightthickness=0,
+                                  bd=0, width=1, height=1)
+        self._preview.pack(side='right', fill='both', expand=True, padx=(16, 0))
+        self._preview_img = None
+        self._preview_id  = None
+        self._preview_msg = self._preview.create_text(
+            0, 0, text='no camera' if VIDEO_CAMERA is None else 'camera opening',
+            fill=MUTED, font=(FONT, 9))
+        self._preview.bind('<Configure>', lambda e: self._preview.coords(
+            self._preview_msg, e.width / 2, e.height / 2))
 
         self._build_timer_card(right)
 
@@ -1109,6 +1127,8 @@ class App:
     def _on_close(self):
         if self._recorder.active:
             self._toggle_record()
+        if self._video:
+            self._video.close()
         self._save_settings()
         self.root.destroy()
 
@@ -1173,13 +1193,53 @@ class App:
         v = self._video
         if v is None:
             return 'camera off', MUTED
-        if v.status == 'recording':
-            return f'camera · {v.written:,} frames', OK_COL
-        if v.status == 'starting':
-            return 'camera starting', WARN_COL
         if v.status.startswith('error'):
             return 'camera · ' + v.status[7:47], ERR_COL
-        return f'camera {v.index} · on Record', MUTED
+        if v.status != 'live':
+            # recording while not live means no video is being written
+            return f'camera {v.status}', ERR_COL if v.recording else WARN_COL
+        if v.recording:
+            return f'camera · {v.written:,} frames', OK_COL
+        return 'camera live', OK_COL
+
+    def _preview_loop(self):
+        """Draw the newest camera picture, letterboxed to the canvas."""
+        try:
+            self._draw_preview()
+        finally:
+            self.root.after(PREVIEW_MS, self._preview_loop)
+
+    def _draw_preview(self):
+        import cv2
+        v, c = self._video, self._preview
+        w, h = c.winfo_width(), c.winfo_height()
+        frame = v.frame
+        if frame is None or w < 40 or h < 30:
+            c.itemconfigure(self._preview_msg, text=f'camera {v.status}')
+            return
+        if v.frame_id == getattr(self, '_preview_seen', None) \
+                and (w, h) == getattr(self, '_preview_wh', None):
+            return                                  # nothing new to draw
+        self._preview_seen, self._preview_wh = v.frame_id, (w, h)
+        fh, fw = frame.shape[:2]
+        k = min(w / fw, h / fh)
+        img = cv2.resize(frame, (max(1, int(fw * k)), max(1, int(fh * k))),
+                         interpolation=cv2.INTER_AREA)
+        ok, ppm = cv2.imencode('.ppm', img)
+        if not ok:
+            return
+        self._preview_img = tk.PhotoImage(data=ppm.tobytes())
+        if self._preview_id is None:
+            self._preview_id = c.create_image(w / 2, h / 2,
+                                              image=self._preview_img)
+        else:
+            c.coords(self._preview_id, w / 2, h / 2)
+            c.itemconfigure(self._preview_id, image=self._preview_img)
+        # the status sits over the picture only when it is not live
+        live = v.status == 'live'
+        c.itemconfigure(self._preview_msg, text='' if live else
+                        f'camera {v.status}', fill='#FFFFFF')
+        c.tag_raise(self._preview_msg)
 
     def _poll(self):
         if self._demo:
