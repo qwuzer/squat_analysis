@@ -75,6 +75,11 @@ class Recorder:
         return self._thread is not None and self._thread.is_alive()
 
     @property
+    def perf0(self):
+        """time.perf_counter() at elapsed_s = 0 — the shared clock origin."""
+        return self._perf0
+
+    @property
     def elapsed(self):
         return 0.0 if self._perf0 is None else time.perf_counter() - self._perf0
 
@@ -104,6 +109,9 @@ class Recorder:
         self._holds_path = self.path[:-4] + '_holds.csv'
         with open(self._holds_path, 'w', newline='', encoding='utf-8') as fh:
             csv.writer(fh).writerow(HOLD_COLUMNS)
+        # set here, not in the writer thread, so the clock origin can be handed
+        # to the camera process the moment start() returns
+        self._perf0 = time.perf_counter()
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -152,7 +160,6 @@ class Recorder:
         with open(self.path, 'w', newline='', encoding='utf-8') as fh:
             w = csv.writer(fh)
             w.writerow(self._meta['columns'])
-            self._perf0 = time.perf_counter()
             next_t = self._perf0
             last_flush = self._perf0
             while not self._stop.is_set():

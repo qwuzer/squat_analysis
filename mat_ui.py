@@ -19,7 +19,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from recorder import Recorder
-from video import GOPRO, Camera
+from video import GOPRO, CameraProcess
 
 try:
     import serial
@@ -30,6 +30,7 @@ except ImportError:
 # ── config ────────────────────────────────────────────────────────────────────
 PORTS      = ["COM7", "COM6", "COM5"]
 BAUD       = 1_500_000
+MIN_PORT_FPS = 90  # below this a port's pill turns red; the mats send 100/s
 UPDATE_MS  = 33
 MAX_VAL    = 16383   # sensor is ~14-bit; resting baseline is ~6000
 
@@ -477,43 +478,56 @@ class PortReader(threading.Thread):
         # instead of letting the thread die permanently
         while True:
             try:
-                with serial.Serial(self.port, baudrate=BAUD,
-                                   bytesize=8, parity='N', stopbits=1, timeout=1) as ser:
+                with serial.Serial(self.port, baudrate=BAUD, bytesize=8,
+                                   parity='N', stopbits=1, timeout=0.05) as ser:
+                    try:                     # room for ~10 s of frames
+                        ser.set_buffer_size(rx_size=1 << 16)
+                    except Exception:
+                        pass
                     self.status = 'ok'
+                    # Read whatever has arrived in one call and split it into
+                    # lines here. readline() costs a system call per byte —
+                    # ~6,000 a second per mat — which on its own held the
+                    # mats to ~23 frames/s with checksum errors, and with the
+                    # camera running, to under 2.
+                    buf = b''
                     while True:
-                        raw = ser.readline()
-                        if not raw:
-                            continue
-                        text = raw.decode('ascii', errors='replace').strip()
-                        if not text.upper().startswith('$SILINO'):
-                            continue
-                        body = _checked_body(text)
-                        if body is None:                     # bad/missing checksum
-                            self.bad += 1
-                            continue
-                        fields = body.split(',')
-                        if len(fields) < 5:
-                            continue
-                        self.frames += 1
-                        try:
-                            num_ch = int(fields[3])
-                        except ValueError:
-                            continue                     # corrupt frame — skip, don't die
-                        # each port owns a fixed 4-channel slot; never write past it
-                        # so a bad num_ch can't bleed into another mat's channels
-                        for i in range(min(num_ch, 4)):
-                            idx = 4 + i
-                            if idx < len(fields):
-                                try:
-                                    v = int(fields[idx])
-                                except ValueError:
-                                    continue            # non-numeric — keep last good
-                                if RAW_MIN <= v <= RAW_MAX:
-                                    self._data[self._offset + i] = v
-                                # else: spurious spike — drop it, keep last good value
+                        buf += ser.read(max(1, ser.in_waiting))
+                        *lines, buf = buf.split(b'\n')
+                        for raw in lines:
+                            self._parse(raw)
             except Exception as exc:
                 self.status = str(exc)
                 time.sleep(1)                            # back off, then reconnect
+
+    def _parse(self, raw):
+        text = raw.decode('ascii', errors='replace').strip()
+        if not text.upper().startswith('$SILINO'):
+            return
+        body = _checked_body(text)
+        if body is None:                     # bad/missing checksum
+            self.bad += 1
+            return
+        fields = body.split(',')
+        if len(fields) < 5:
+            return
+        self.frames += 1
+        try:
+            num_ch = int(fields[3])
+        except ValueError:
+            return                           # corrupt frame — skip, don't die
+        # each port owns a fixed 4-channel slot; never write past it
+        # so a bad num_ch can't bleed into another mat's channels
+        for i in range(min(num_ch, 4)):
+            idx = 4 + i
+            if idx < len(fields):
+                try:
+                    v = int(fields[idx])
+                except ValueError:
+                    continue            # non-numeric — keep last good
+                if RAW_MIN <= v <= RAW_MAX:
+                    self._data[self._offset + i] = v
+                # else: spurious spike — drop it, keep last good value
 
 
 # ── demo mode (no serial) ─────────────────────────────────────────────────────
@@ -697,7 +711,7 @@ class App:
         self._demo = not HAS_SERIAL
         self._recorder = Recorder(self._data, range(4 * len(PORTS)), RECORD_HZ)
         self._video = (None if VIDEO_CAMERA is None else
-                       Camera(VIDEO_CAMERA, VIDEO_FPS, VIDEO_SIZE))
+                       CameraProcess(VIDEO_CAMERA, VIDEO_FPS, VIDEO_SIZE))
         self._settings = self._load_settings()
         self._hold     = None     # {'idx', 'name', 'rep', 'start'}; rep is the
                                   # operator's counter only, it is not saved
@@ -1100,7 +1114,7 @@ class App:
                                  'experience': f['experience'] or None},
             })
             if self._video:
-                self._video.start(path[:-4], lambda: self._recorder.elapsed)
+                self._video.start(path[:-4], self._recorder.perf0)
             self._style_record_btn(True)
             self._last_end = None
             self._say(f'recording to {os.path.basename(path)}')
@@ -1173,6 +1187,21 @@ class App:
                          'status': r.status}
                 for r in getattr(self, '_readers', [])}
 
+    def _port_rates(self):
+        """Accepted frames per second per port over the last ~2 s, or {}
+        until there is a window to measure over."""
+        now = time.monotonic()
+        hist = getattr(self, '_rate_hist', None)
+        if hist is None:
+            hist = self._rate_hist = collections.deque()
+        hist.append((now, {r.port: r.frames for r in self._readers}))
+        while len(hist) > 2 and now - hist[1][0] >= 2.0:
+            hist.popleft()
+        t0, f0 = hist[0]
+        if now - t0 < 1.5:
+            return {}
+        return {p: (n - f0[p]) / (now - t0) for p, n in hist[-1][1].items()}
+
     def _camera_pill(self):
         v = self._video
         if v is None:
@@ -1219,8 +1248,14 @@ class App:
         if self._demo:
             self._set_pill('demo', 'demo mode — no ports', WARN_COL)
         else:
+            rates = self._port_rates()
             for r in self._readers:
-                if r.status == 'ok':
+                fps = rates.get(r.port)
+                if r.status == 'ok' and fps is not None and fps < MIN_PORT_FPS:
+                    # the failure that went unnoticed for three sessions: the
+                    # port is open but frames have slowed to a trickle
+                    text, colour = f'{r.port} · {fps:.0f} fps (low)', ERR_COL
+                elif r.status == 'ok':
                     text, colour = r.port, OK_COL
                 elif r.status.startswith('connecting'):
                     text, colour = f'{r.port} connecting', WARN_COL
