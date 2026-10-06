@@ -156,22 +156,31 @@ The operator runs the laptop; the subject only follows instructions.
    | --- | --- | --- | --- |
    | 1 | empty mat | 10 s | automatic — no need to press |
    | 2 | quiet standing | 30 s | 1 |
-   | 3 | eyes closed | 30 s | 1 |
-   | 4 / 5 | tree L / R | 15 s | 3 each |
-   | 6 / 7 | warrior 2 L / R | 15 s | 3 each |
-   | 8 | chair | 15 s | 3 |
-   | 9 | warrior 2 L, deliberate fault | 15 s | 1 |
-   | 0 | forearm plank | 15 s | 3 |
+   | 3 / 4 | tree L / R | 15 s | 3 each |
+   | 5 / 6 | warrior 2 L / R | 15 s | 3 each |
+   | 7 | chair | 15 s | 3 |
+   | 8 | warrior 2 L, deliberate fault | 15 s | 1 |
+   | 9 | forearm plank | 15 s | 3 |
+   | **E** | **eyes closed** on/off — applies to every pose started while on | | |
+
+   **Eyes closed is a switch, not a pose.** Press **E** (or the *Eyes open /
+   Eyes closed* button) before starting the pose; the button turns purple and
+   the timer says "eyes closed". Poses started while it is on are saved as
+   `<pose>_eyes_closed` — `standing_eyes_closed`, `tree_L_eyes_closed` — and
+   counted separately on the buttons. It stays on until pressed again, so
+   **turn it off afterwards**. Empty holds are never marked.
 
 5. Each button counts its holds (`tree L 2/3`) and turns green when complete,
    so the button row doubles as the session checklist.
-6. Press **Stop** (it ends the last empty hold). Closing the window mid-recording also stops cleanly.
+6. Press **Stop** (it ends the last empty hold). A report — graph and one
+   video frame per hold — is written into the session folder a few seconds
+   later (`recording_format.md` §2). Closing the window mid-recording also stops cleanly.
 
 Rep counts are kept per subject across restarts. **reset reps** clears the
 current subject's counts if a session is being redone.
 
 Each hold is saved as one row — `pose, start_s, end_s` — in `<session>_holds.csv`.
-`python recorder.py merge recordings/<session>.csv` adds a `pose` column to the
+`python recorder.py merge recordings/<subject>_<date>/<session>.csv` adds a `pose` column to the
 signal ([`recording_format.md`](recording_format.md) §2–3). Holds pressed this way
 start settled, but a short trim at feature extraction is still worth having.
 
