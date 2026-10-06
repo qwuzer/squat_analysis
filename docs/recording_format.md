@@ -137,12 +137,20 @@ camera therefore repeats frames rather than making the file play fast, so the
 mp4 plays at true speed and frame *k* is at `first_tick_s + k / 30`. Two rows
 with the same `capture_s` are the same picture.
 
+**The camera runs in its own process**, started and stopped by the mat app, at
+below-normal priority. In the same process it starved the mat readers (see
+`findings.md` 8.9). Both processes read the same system clock, so frame times
+are still on the signal's `elapsed_s`: the recorder hands the camera process the
+`perf_counter` value at `elapsed_s = 0`.
+
 **GoPro setup.** Plug the HERO11 Black in by USB and **quit GoPro's Webcam
 app** (tray icon → Quit; turn off its start-with-Windows option). `video.py`
 reads the camera directly:
 
 1. finds it on its USB network link — the camera is `172.2X.1YZ.51`;
-2. asks it to start webcam streaming at 720p (stopping any stream first);
+2. asks it to start webcam streaming at 720p with the **linear** lens (no
+   fisheye, so straight lines and body angles are not bent), stopping any
+   stream first;
 3. decodes the MPEG-TS stream it sends to UDP port **8554** on the laptop.
 
 GoPro's app is bypassed because it was unreliable: it sat on a black screen or
@@ -157,8 +165,11 @@ read times out after 5 s and the camera is reopened.
 The stream is 720p because that is what is saved, and decoding 1080p costs
 CPU. **The UI already stutters every few seconds** (redraw spikes of 0.2–0.6 s
 without a camera); with the camera running the worst spikes reach ~1 s. The
-mat data is unaffected — it is written by its own thread, and the 20 s test
-with video kept 100.0 rows/s with no gap over 13 ms.
+mat data is unaffected: the 2-minute hardware test with video kept 100.0
+frames/s on every port with no checksum errors.
+
+Linear is narrower than wide: place the camera so **all three mats** are in
+frame.
 
 To see the video at a moment in the mat data: find the row in `_frames.csv`
 with the nearest `elapsed_s`, and seek to that frame.

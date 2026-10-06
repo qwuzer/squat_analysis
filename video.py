@@ -26,13 +26,22 @@ sensor. The stream adds a fixed delay that this does not remove. Measure it once
 with a stomp — a spike in the mat data and a visible frame — and subtract it at
 analysis.
 
+**The camera runs in its own process** (CameraProcess). In the same process its
+work starved the serial readers — Python runs one thread at a time — and the
+mats delivered 0–2 frames/s instead of 100, silently, for three sessions. Its
+own process, at below-normal priority, cannot take anything from the mats.
+Both processes read the same system clock (time.perf_counter is system-wide on
+Windows), so frames are still stamped on the mat recorder's elapsed_s.
+
 The camera is optional. If it cannot be opened, the mat recording carries on
 and the sidecar says why there is no video.
 """
 
 import csv
 import json
+import multiprocessing as mp
 import os
+import queue
 import re
 import socket
 import threading
@@ -87,9 +96,14 @@ def port_free(port):
         s.close()
 
 
-def gopro_webcam_start(url, res=7, fov=0, timeout=3.0):
+GOPRO_FOV_LINEAR = 4   # webcam lens: 0 wide (fisheye), 2 narrow, 3 superview,
+                       # 4 linear — straight lines stay straight, so posture
+                       # angles measured from the video are not bent by the lens
+
+
+def gopro_webcam_start(url, res=7, fov=GOPRO_FOV_LINEAR, timeout=3.0):
     """Ask the camera to (re)start streaming as a webcam. res 7 = 720p,
-    12 = 1080p; fov 0 = wide. Raises if the camera does not answer.
+    12 = 1080p; fov as above. Raises if the camera does not answer.
 
     720p by default: the video is saved at 720p anyway, and decoding a 1080p
     stream takes enough CPU to make the UI stutter. A stream already running
@@ -148,7 +162,7 @@ class Camera:
         r = self._rec
         return r['written'] if r else 0
 
-    def start(self, base_path, clock):
+    def start(self, base_path, clock):  # noqa: D401 — see CameraProcess.start
         """Begin writing `<base_path>.mp4`. `clock()` returns the mat
         recorder's elapsed_s, so the two files share one time axis. If the
         camera is not live yet, recording begins as soon as it is."""
@@ -305,3 +319,120 @@ class Camera:
             r['captured'] += 1
         except Exception as e:                 # never take the mat recording down
             r['error'] = str(e)
+
+
+# ── the camera in its own process ─────────────────────────────────────────────
+
+BELOW_NORMAL_PRIORITY_CLASS = 0x4000
+
+
+def _serve(cmds, events, source, fps, size):
+    """Body of the camera process: run a Camera, obey commands, report state."""
+    try:                                   # the mats and the UI come first
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        k32.SetPriorityClass(k32.GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS)
+    except Exception:
+        pass
+    cam = Camera(source, fps, size)
+    cam.open()
+    sent = 0.0
+    while True:
+        try:
+            cmd = cmds.get(timeout=0.25)
+        except queue.Empty:
+            cmd = None
+        if cmd is not None:
+            if cmd[0] == 'start':
+                perf0 = cmd[2]
+                cam.start(cmd[1], lambda: time.perf_counter() - perf0)
+            elif cmd[0] == 'stop':
+                events.put(('stopped', cam.stop()))
+            elif cmd[0] == 'close':
+                cam.close()
+                return
+        if time.monotonic() - sent > 0.5 or cmd is not None:
+            events.put(('state', cam.status, cam.recording, cam.written))
+            sent = time.monotonic()
+
+
+class CameraProcess:
+    """Camera's interface, but the camera runs in a child process.
+
+    start() takes the mat recorder's perf_counter origin rather than a clock
+    function: a function cannot cross into another process, a number can.
+    """
+
+    def __init__(self, source=GOPRO, fps=30, size=(1280, 720)):
+        self.source, self.fps, self.size = source, fps, tuple(size)
+        self.status, self.recording, self.written = 'off', False, 0
+        self.last = None
+        self._proc = None
+        self._stopped = threading.Event()
+        self._stop_meta = None
+
+    def open(self):
+        if not HAS_CV2:
+            self.status = 'error: opencv not installed'
+            return
+        ctx = mp.get_context('spawn')
+        self._cmds, self._events = ctx.Queue(), ctx.Queue()
+        self._proc = ctx.Process(target=_serve, daemon=True, name='camera',
+                                 args=(self._cmds, self._events, self.source,
+                                       self.fps, self.size))
+        self._proc.start()
+        self.status = 'opening'
+        threading.Thread(target=self._listen, daemon=True).start()
+
+    def _listen(self):
+        while True:
+            try:
+                ev = self._events.get(timeout=1.0)
+            except queue.Empty:
+                if self._proc is None or not self._proc.is_alive():
+                    if self.status != 'off':
+                        self.status = 'error: camera process ended'
+                    return
+                continue
+            except (EOFError, OSError):
+                return
+            if ev[0] == 'state':
+                self.status, self.recording, self.written = ev[1:]
+            elif ev[0] == 'stopped':
+                self._stop_meta = ev[1]
+                self._stopped.set()
+
+    def start(self, base_path, perf0):
+        """Begin writing `<base_path>.mp4`, timed as perf_counter() - perf0."""
+        if self._proc is None or not self._proc.is_alive():
+            return False
+        self._cmds.put(('start', base_path, perf0))
+        self.recording, self.written = True, 0
+        return True
+
+    def stop(self):
+        """Stop writing; return what the sidecar should say about the video."""
+        if self._proc is None or not self._proc.is_alive():
+            self.recording = False
+            return None
+        self._stopped.clear()
+        self._cmds.put(('stop',))
+        if not self._stopped.wait(5.0):
+            self.last = {'status': 'error: camera did not answer stop'}
+        else:
+            self.last = self._stop_meta
+        self.recording = False
+        return self.last
+
+    def close(self):
+        if self._proc is None:
+            return
+        if self.recording:
+            self.stop()
+        self.status = 'off'
+        try:
+            self._cmds.put(('close',))
+            self._proc.join(timeout=3)
+        finally:
+            if self._proc.is_alive():
+                self._proc.terminate()

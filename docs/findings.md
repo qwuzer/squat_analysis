@@ -219,6 +219,8 @@ recording would flicker constantly on a fidgetier day.
 | 8.7 | **The slope window counts UI frames, not sensor samples** | Harmless at 100 fps, but a slow port would silently under-report every slope |
 | 8.8 | ~~**The file header contradicts the code** on which port feeds which channels~~ | **Resolved 2026-10-01.** Checked by standing on each mat: Mats 1 and 3 were swapped. Now COM5 → ch 8–11 → Mat 1, COM6 → ch 4–7 → Mat 2, COM7 → ch 0–3 → Mat 3. Raw data is keyed by channel, so nothing recorded is affected — only the names |
 
+| 8.9 | ~~**Video starved the mat readers**~~ | **Resolved 2026-10-06.** In the three sessions recorded with video (elijio 10-05, lu 10-06, chang 10-06) the mats delivered 0–2 frames/s instead of 100, so the signal is flat steps with drops to ~4 — **their mat data is unusable; re-record them.** Cause: the serial readers called `readline()`, a system call per byte, which alone held the mats to ~23 frames/s; the camera, running in the same Python process, took the rest. Fix: reads are chunked (100.0 frames/s, 0 checksum errors), the camera runs in its own process, and a port's pill turns red below 90 frames/s. Verified on the hardware: 2-min recording with video, 100.0 frames/s on all three ports, longest freeze 40 ms |
+
 ## 9. What we are missing
 
 ### 9.1 Measurements not yet taken
