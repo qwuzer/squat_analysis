@@ -90,11 +90,14 @@ class Recorder:
         if self.active:
             raise RuntimeError("already recording")
         self.reset()
-        os.makedirs(out_dir, exist_ok=True)
         self.started = time.time()
         stamp = time.strftime('%Y%m%d_%H%M%S', time.localtime(self.started))
         name = f"{subject or 'session'}_{stamp}"
-        self.path = os.path.join(out_dir, name + '.csv')
+        # one folder per subject per day — a different day is a different
+        # session — holding every file of every recording made in it
+        folder = os.path.join(out_dir, name.rsplit('_', 1)[0])
+        os.makedirs(folder, exist_ok=True)
+        self.path = os.path.join(folder, name + '.csv')
         self._meta = dict(meta or {})
         self._meta.update({
             'subject_id': subject,

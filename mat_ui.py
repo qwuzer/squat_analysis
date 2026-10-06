@@ -13,6 +13,8 @@ import json
 import math
 import os
 import random
+import subprocess
+import sys
 import threading
 import time
 import tkinter as tk
@@ -109,8 +111,8 @@ ARROW_FULL  = 2400  # counts/s that reaches the edge of the circle
 # Sessions are written next to the app in the same shape the bicep pipeline
 # reads: uniform grid, wall-clock Time column, one column per channel. See
 # recorder.py for why metadata goes in a sidecar instead of repeated columns.
-RECORD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          'recordings')
+HERE = os.path.dirname(os.path.abspath(__file__))
+RECORD_DIR = os.path.join(HERE, 'recordings')
 RECORD_HZ  = 100    # matches what the mats actually emit
 REC_ON     = '#E5484D'
 
@@ -135,7 +137,6 @@ POSES = [
     # only the one from the start. reps None: no target, it just counts
     ('empty',                 'empty',         10,       None),
     ('standing',              'standing',      30,       1),
-    ('standing_eyes_closed',  'eyes closed',   30,       1),
     ('tree_L',                'tree L',        15,       3),
     ('tree_R',                'tree R',        15,       3),
     ('warrior2_L',            'warrior2 L',    15,       3),
@@ -147,9 +148,16 @@ POSES = [
     # fatigue — if 15 s shows too little, this is the one hold worth lengthening
     ('plank',                 'plank',         15,       3),
 ]
-POSE_KEYS = '1234567890'
+POSE_KEYS = '1234567890'   # hotkey for each entry in POSES, in order
 EMPTY = 'empty'
-EMPTY_IDX = next(i for i, p in enumerate(POSES) if p[0] == EMPTY)   # hotkey for each entry in POSES, in order
+EMPTY_IDX = next(i for i, p in enumerate(POSES) if p[0] == EMPTY)
+# Eyes closed is a modifier on any pose, not a pose of its own: with it on, a
+# pose is saved as e.g. tree_L_eyes_closed (standing_eyes_closed keeps the name
+# the old preset used). Key E toggles it; it stays on until turned off, and
+# never applies to empty holds.
+EYES_SUFFIX = '_eyes_closed'
+EYES_KEY = 'e'
+EYES_ON = '#6E56CF'
 REST_S = 10         # step off between holds; the rest timer turns green here
 
 # Field values and per-subject rep counts survive a restart. Local to this
@@ -719,6 +727,7 @@ class App:
         self._video = (None if VIDEO_CAMERA is None else
                        CameraProcess(VIDEO_CAMERA, VIDEO_FPS, VIDEO_SIZE))
         self._settings = self._load_settings()
+        self._eyes     = False    # eyes-closed modifier for the next poses
         self._hold     = None     # {'idx', 'name', 'rep', 'start'}; rep is the
                                   # operator's counter only, it is not saved
         self._last_end = None     # session time the last hold ended, for rest
@@ -742,6 +751,8 @@ class App:
             root.bind(key, lambda e, i=i:
                       None if self._typing() else self._start_hold(i))
         root.bind('<space>', lambda e: None if self._typing() else self._space())
+        root.bind(f'<{EYES_KEY}>', lambda e: None if self._typing() else
+                  self._toggle_eyes())
         # closing mid-recording must still close the open hold and write the
         # sidecar, both of which only happen on stop
         root.protocol('WM_DELETE_WINDOW', self._on_close)
@@ -947,6 +958,11 @@ class App:
             font=(FONT, 10, 'bold'), cursor='hand2', padx=10, pady=3,
             command=self._end_hold)
         self._end_btn.pack(side='left', padx=(8, 0))
+        self._eyes_btn = tk.Button(
+            btns, text='', relief='flat', bd=0, font=(FONT, 10, 'bold'),
+            cursor='hand2', padx=10, pady=3, command=self._toggle_eyes)
+        self._eyes_btn.pack(side='left', padx=(8, 0))
+        self._style_eyes_btn()
         self._style_record_btn(False)
 
         self._rec_status = tk.Label(top, text=self._idle_status, bg=CARD,
@@ -1040,13 +1056,39 @@ class App:
         if self._hold:
             self._end_hold()             # a new pose closes the one in progress
         name, label, target, reps = POSES[idx]
+        name, label = self._pose_name(idx)
         rep = self._reps().get(name, 0) + 1
-        self._hold = {'idx': idx, 'name': name, 'rep': rep,
+        self._hold = {'idx': idx, 'name': name, 'label': label, 'rep': rep,
                       'start': self._recorder.elapsed}
         self._refresh_pose_buttons()
         self._say(f'{label} — started' if reps is None
                   else f'{label} — hold {rep} of {reps} started')
         self.root.focus_set()
+
+    def _pose_name(self, idx):
+        """(name, label) a hold of POSES[idx] is saved and shown under."""
+        name, label = POSES[idx][:2]
+        if self._eyes and name != EMPTY:
+            return name + EYES_SUFFIX, label + ' \u00b7 eyes closed'
+        return name, label
+
+    def _toggle_eyes(self):
+        self._eyes = not self._eyes
+        self._style_eyes_btn()
+        self._refresh_pose_buttons()
+        self._say('eyes closed ON — poses are saved as eyes closed' if self._eyes
+                  else 'eyes closed off', EYES_ON if self._eyes else FG)
+        self.root.focus_set()
+
+    def _style_eyes_btn(self):
+        if self._eyes:
+            self._eyes_btn.config(text='\u25c9  Eyes closed  (e)', bg=EYES_ON,
+                                  fg='#FFFFFF', activebackground=EYES_ON,
+                                  activeforeground='#FFFFFF')
+        else:
+            self._eyes_btn.config(text='\u25cb  Eyes open  (e)', bg=GRID,
+                                  fg=FG, activebackground=BORDER,
+                                  activeforeground=FG)
 
     def _space(self):
         """End the pose in progress and start an empty hold for the rest.
@@ -1068,7 +1110,7 @@ class App:
         self._last_end = now
         self._save_settings()
         self._refresh_pose_buttons()
-        self._say(f"{POSES[h['idx']][1]} — hold {h['rep']} done, "
+        self._say(f"{h['label']} — hold {h['rep']} done, "
                   f"{took:.0f} s")
         self.root.focus_set()
 
@@ -1077,7 +1119,7 @@ class App:
         live = self._recorder.active
         for i, (name, label, target, reps) in enumerate(POSES):
             b = self._pose_btns[i]
-            done = counts.get(name, 0)
+            done = counts.get(self._pose_name(i)[0], 0)
             b.config(text=f'{POSE_KEYS[i]}  {label}\n'
                           + (f'{done}' if reps is None else f'{done}/{reps}'),
                      state='normal' if live else 'disabled')
@@ -1110,6 +1152,7 @@ class App:
             self._idle_status = (f"saved {os.path.basename(self._recorder.path)}"
                                  f"  \u00b7  {meta['rows']:,} rows, "
                                  f"{meta['holds']} holds")
+            self._make_report(self._recorder.path)
             if video and video['status'] == 'ok':
                 self._idle_status += f", {video['frames_written']:,} video frames"
             elif video:
@@ -1141,6 +1184,20 @@ class App:
         self._refresh_pose_buttons()
         self.root.focus_set()
 
+    def _make_report(self, csv_path):
+        """Graph and pose screenshots for the session just saved (report.py),
+        in a separate process at below-normal priority so it can take nothing
+        from the mats if the next recording starts straight away."""
+        try:
+            subprocess.Popen(
+                [sys.executable, os.path.join(HERE, 'report.py'), csv_path],
+                cwd=HERE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, 'BELOW_NORMAL_PRIORITY_CLASS', 0)
+                | getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            self._idle_status += '  \u00b7  report being made'
+        except Exception as e:
+            self._idle_status += f'  \u00b7  no report ({e})'
+
     def _on_close(self):
         if self._recorder.active:
             self._toggle_record()
@@ -1171,6 +1228,7 @@ class App:
         h = self._hold
         if h:
             name, label, target, reps = POSES[h['idx']]
+            label = h['label']
             held = now - h['start']
             self._show(self._hold_name,
                        f"{label}  \u00b7  step off the mat" if reps is None
