@@ -221,6 +221,20 @@ recording would flicker constantly on a fidgetier day.
 
 | 8.9 | ~~**Video starved the mat readers**~~ | **Resolved 2026-10-06.** In the three sessions recorded with video (elijio 10-05, lu 10-06, chang 10-06) the mats delivered 0–2 frames/s instead of 100, so the signal is flat steps with drops to ~4 — **their mat data is unusable; re-record them.** Cause: the serial readers called `readline()`, a system call per byte, which alone held the mats to ~23 frames/s; the camera, running in the same Python process, took the rest. Fix: reads are chunked (100.0 frames/s, 0 checksum errors), the camera runs in its own process, and a port's pill turns red below 90 frames/s. Verified on the hardware: 2-min recording with video, 100.0 frames/s on all three ports, longest freeze 40 ms |
 
+### 8.10 After the first step-off the mat keeps ~2,000 counts
+
+Seen in yj (10-01) and elijio (10-06): the load is ~0 before the subject first
+steps on, then sits at **~2,100–2,600** in every rest afterwards — with the
+subject off the mat (operator-confirmed). It does not grow much from rest to
+rest, so it behaves like a one-time offset, not a drift. Lu (10-01) did not show
+it (rests at 40–290) — unexplained.
+
+Measured against the empty reading from the start, that offset is spread over
+all four bands and pulls ratios toward 0: elijio's tree reads x = ±0.4. Against
+the middle of the rest before each hold it reads **±1.0**, matching Lu. So:
+**each hold's empty reading must come from just before it** — which is why the
+app now records an empty hold automatically between poses.
+
 ## 9. What we are missing
 
 ### 9.1 Measurements not yet taken

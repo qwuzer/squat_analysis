@@ -129,7 +129,11 @@ VIDEO_SIZE   = (1280, 720)   # written size — enough to see the pose, ~25 MB/m
 # a session without keeping time and count in their head.
 POSES = [
     # name                     button label    target s  reps
-    ('empty',                 'empty',         15,       2),  # start and end
+    # empty runs automatically: from Record, and again each time Space ends a
+    # pose. After the first step-off the mat keeps ~2,000 counts that it does
+    # not give back, so each pose needs the empty reading just before it, not
+    # only the one from the start. reps None: no target, it just counts
+    ('empty',                 'empty',         10,       None),
     ('standing',              'standing',      30,       1),
     ('standing_eyes_closed',  'eyes closed',   30,       1),
     ('tree_L',                'tree L',        15,       3),
@@ -143,8 +147,10 @@ POSES = [
     # fatigue — if 15 s shows too little, this is the one hold worth lengthening
     ('plank',                 'plank',         15,       3),
 ]
-POSE_KEYS = '1234567890'   # hotkey for each entry in POSES, in order
-REST_S = 15         # step off between holds; the rest timer turns green here
+POSE_KEYS = '1234567890'
+EMPTY = 'empty'
+EMPTY_IDX = next(i for i, p in enumerate(POSES) if p[0] == EMPTY)   # hotkey for each entry in POSES, in order
+REST_S = 10         # step off between holds; the rest timer turns green here
 
 # Field values and per-subject rep counts survive a restart. Local to this
 # machine and gitignored — it holds body weights.
@@ -735,7 +741,7 @@ class App:
         for i, key in zip(range(len(POSES)), POSE_KEYS):
             root.bind(key, lambda e, i=i:
                       None if self._typing() else self._start_hold(i))
-        root.bind('<space>', lambda e: None if self._typing() else self._end_hold())
+        root.bind('<space>', lambda e: None if self._typing() else self._space())
         # closing mid-recording must still close the open hold and write the
         # sidecar, both of which only happen on stop
         root.protocol('WM_DELETE_WINDOW', self._on_close)
@@ -1038,8 +1044,17 @@ class App:
         self._hold = {'idx': idx, 'name': name, 'rep': rep,
                       'start': self._recorder.elapsed}
         self._refresh_pose_buttons()
-        self._say(f'{label} — hold {rep} of {reps} started')
+        self._say(f'{label} — started' if reps is None
+                  else f'{label} — hold {rep} of {reps} started')
         self.root.focus_set()
+
+    def _space(self):
+        """End the pose in progress and start an empty hold for the rest.
+        Ending an empty hold just ends it."""
+        was = self._hold
+        self._end_hold()
+        if was and was['name'] != EMPTY:
+            self._start_hold(EMPTY_IDX)
 
     def _end_hold(self):
         h = self._hold
@@ -1063,12 +1078,13 @@ class App:
         for i, (name, label, target, reps) in enumerate(POSES):
             b = self._pose_btns[i]
             done = counts.get(name, 0)
-            b.config(text=f'{POSE_KEYS[i]}  {label}\n{done}/{reps}',
+            b.config(text=f'{POSE_KEYS[i]}  {label}\n'
+                          + (f'{done}' if reps is None else f'{done}/{reps}'),
                      state='normal' if live else 'disabled')
             if self._hold and self._hold['idx'] == i:
                 b.config(bg=ACCENT, fg='#FFFFFF', activebackground=ACCENT,
                          activeforeground='#FFFFFF')
-            elif done >= reps:
+            elif reps is not None and done >= reps:
                 b.config(bg=_blend(CARD, OK_COL, 0.14),
                          fg=_blend(OK_COL, '#000000', 0.25),
                          activebackground=_blend(CARD, OK_COL, 0.24),
@@ -1117,6 +1133,9 @@ class App:
                 self._video.start(path[:-4], self._recorder.perf0)
             self._style_record_btn(True)
             self._last_end = None
+            # the subject is off the mat when Record is pressed, so the
+            # session opens with its empty reading
+            self._start_hold(EMPTY_IDX)
             self._say(f'recording to {os.path.basename(path)}')
         self._save_settings()
         self._refresh_pose_buttons()
@@ -1154,7 +1173,8 @@ class App:
             name, label, target, reps = POSES[h['idx']]
             held = now - h['start']
             self._show(self._hold_name,
-                       f"{label}  \u00b7  hold {h['rep']} of {reps}", FG)
+                       f"{label}  \u00b7  step off the mat" if reps is None
+                       else f"{label}  \u00b7  hold {h['rep']} of {reps}", FG)
             self._show(self._hold_lbl, f'{_ms(held)} / {_ms(target)}',
                        OK_COL if held >= target else FG)
         elif self._last_end is not None:
@@ -1163,7 +1183,7 @@ class App:
             self._show(self._hold_lbl, f'{_ms(rest)} / {_ms(REST_S)}',
                        OK_COL if rest >= REST_S else MUTED)
         else:
-            self._show(self._hold_name, 'press 1\u20139 to start a hold', MUTED)
+            self._show(self._hold_name, 'press 1\u20139 or 0 to start a hold', MUTED)
             self._show(self._hold_lbl, '0:00', MUTED)
 
     def _update_status(self):
