@@ -134,12 +134,27 @@ The operator runs the laptop; the subject only follows instructions.
 
 1. Fill in **subject, weight, height, experience**. They are remembered across
    restarts, so for a returning subject there is nothing to type.
-2. Press **Record**. The session clock starts.
-3. Press a **number key** to start a hold, **Space** to end it:
+2. Have the subject **off the mat**, then press **Record**. The session clock
+   starts and an **empty** hold starts with it.
+3. Tell them the pose. Once they are **in it and settled** — final position,
+   no longer adjusting their feet — press its **number key**. That ends the
+   empty hold and starts the pose.
+4. When the hold timer turns green, press **Space**, *then* say "release".
+   Space ends the pose and starts the next **empty** hold at once; they step
+   off during it. Start the next pose when its 10 s timer is green.
+
+   Holds then contain the pose only — getting on and off falls in the empty
+   holds — and every pose has an empty reading right before it. That matters:
+   after the first step-off the mat keeps ~2,000 counts it does not give back
+   (`findings.md`), so the empty reading from the start is stale for every
+   later pose.
+
+   If they fall or put a foot down, press Space at that moment and redo the
+   hold.
 
    | Key | Condition | Target | Reps |
    | --- | --- | --- | --- |
-   | 1 | empty mat | 15 s | 2 — start and end |
+   | 1 | empty mat | 10 s | automatic — no need to press |
    | 2 | quiet standing | 30 s | 1 |
    | 3 | eyes closed | 30 s | 1 |
    | 4 / 5 | tree L / R | 15 s | 3 each |
@@ -148,19 +163,17 @@ The operator runs the laptop; the subject only follows instructions.
    | 9 | warrior 2 L, deliberate fault | 15 s | 1 |
    | 0 | forearm plank | 15 s | 3 |
 
-4. The **hold timer** turns green at the target. After Space it becomes a
-   **rest timer**, which turns green at 15 s — that is when to start the next.
 5. Each button counts its holds (`tree L 2/3`) and turns green when complete,
    so the button row doubles as the session checklist.
-6. Press **Stop**. Closing the window mid-recording also stops cleanly.
+6. Press **Stop** (it ends the last empty hold). Closing the window mid-recording also stops cleanly.
 
 Rep counts are kept per subject across restarts. **reset reps** clears the
 current subject's counts if a session is being redone.
 
 Each hold is saved as one row — `pose, start_s, end_s` — in `<session>_holds.csv`.
 `python recorder.py merge recordings/<session>.csv` adds a `pose` column to the
-signal ([`recording_format.md`](recording_format.md) §2–3). Remember that holds
-include the transitions in and out; trim them at feature extraction.
+signal ([`recording_format.md`](recording_format.md) §2–3). Holds pressed this way
+start settled, but a short trim at feature extraction is still worth having.
 
 ---
 

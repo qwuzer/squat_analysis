@@ -14,7 +14,9 @@ Run `python mat_ui.py`. The panel at the bottom has two rows.
 on the next launch.
 
 **Pose buttons** — one per protocol condition. Keys **1–9 and 0** start a hold for
-that pose and **Space** ends it. Starting a new pose while one is running ends
+that pose and **Space** ends it. **Empty holds are automatic**: one starts with
+Record, and Space on a pose starts another, so the file alternates
+empty / pose / empty. Space on an empty hold just ends it. Starting a new pose while one is running ends
 the current one first. Each button shows how many holds of that pose are done
 against the target (`tree L 2/3`); those counts are remembered per subject.
 They are an operator aid only — they are not written to the data.
@@ -25,7 +27,7 @@ They are an operator aid only — they are not written to the data.
 | --- | --- |
 | **Session** | time since Record, red while recording |
 | **Hold** | pose, which hold of the target, and elapsed vs target — turns green at the target |
-| **Rest** | after a hold ends, time since — turns green at 15 s |
+| **Rest** | after an empty hold is ended by hand, time since — turns green at 10 s |
 
 | Key | Does |
 | --- | --- |
