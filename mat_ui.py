@@ -956,7 +956,7 @@ class App:
             bg=FG, fg='#FFFFFF', activebackground=_blend(FG, '#FFFFFF', 0.2),
             activeforeground='#FFFFFF', disabledforeground=MUTED,
             font=(FONT, 10, 'bold'), cursor='hand2', padx=10, pady=3,
-            command=self._end_hold)
+            command=self._space)         # same as the key: a rest follows a pose
         self._end_btn.pack(side='left', padx=(8, 0))
         self._eyes_btn = tk.Button(
             btns, text='', relief='flat', bd=0, font=(FONT, 10, 'bold'),
