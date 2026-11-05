@@ -13,7 +13,7 @@ Run `python mat_ui.py`. The panel at the bottom has two rows.
 `mat_ui_settings.json` (local, gitignored — it holds body weights) and restored
 on the next launch.
 
-**Pose buttons** — one per protocol condition. Keys **1–9 and 0** start a hold for
+**Pose buttons** — one per protocol condition. Keys **1–9** start a hold for
 that pose and **Space** ends it. **Empty holds are automatic**: one starts with
 Record, and Space on a pose starts another, so the file alternates
 empty / pose / empty. Space on an empty hold just ends it. Starting a new pose while one is running ends
@@ -31,22 +31,57 @@ They are an operator aid only — they are not written to the data.
 
 | Key | Does |
 | --- | --- |
-| `1`–`9`, `0` | start a hold |
-| `Space` | end the hold |
+| `1`–`9` | start a hold |
+| `Space` | end the hold (and start an empty one) |
+| `E` | eyes closed on/off for the poses that follow |
 | `r` | re-zero the aligned chart |
 
 Hotkeys are ignored while a text box has focus. **Closing the window while
 recording stops the recording first**, so the hold in progress and the sidecar
 are never lost.
 
-Files land in `recordings/`, which is gitignored.
+Files land in **one folder per subject per day**, `recordings/<subject>_<YYYYmmdd>/`
+— a different day is a different session, so it gets its own folder, and
+every recording made that day goes in it. `recordings/` is gitignored.
 
 ---
 
 ## 2. What gets written
 
-Three files per session, named `<subject>_<YYYYmmdd>_<HHMMSS>` — five with a
-camera.
+Three files per recording, named `<subject>_<YYYYmmdd>_<HHMMSS>` — five with a
+camera, plus the report.
+
+```
+recordings/elijio_20261006/
+  elijio_20261006_153536.csv          signal
+  elijio_20261006_153536_holds.csv    pose, start_s, end_s
+  elijio_20261006_153536.json         metadata
+  elijio_20261006_153536.mp4          video          (with a camera)
+  elijio_20261006_153536_frames.csv   frame times    (with a camera)
+  elijio_20261006_153536_report.png   graph          (report.py)
+  elijio_20261006_153536_poses.jpg    a frame per hold (report.py, with video)
+```
+
+Pose names are the presets' names, with `_eyes_closed` appended when the
+eyes-closed switch was on: `tree_L_eyes_closed`. Empty holds are `empty`.
+
+### The report — `<name>_report.png` and `<name>_poses.jpg`
+
+`report.py` makes both; the app runs it after every Stop, in its own
+low-priority process. By hand:
+
+```bash
+python report.py recordings/elijio_20261006          # every recording in it
+python report.py --all                               # any that lack a report
+```
+
+The graph is the raw bands, total load, and left/right and front/back balance,
+with rests shaded blue and poses grey. **Balance is measured against the empty
+hold just before each pose**, because the mat keeps ~2,000 counts after the
+first step-off (`findings.md` 8.10); recordings from before empty holds were
+automatic use 4–9 s after each pose instead. The poses sheet is one video frame
+from the middle of every hold, labelled rest / standing / tree L / … in order.
+Needs `matplotlib` and `opencv-python`.
 
 ### `<name>.csv` — the signal
 
@@ -196,7 +231,7 @@ and consent for video has to be in the consent form.
 ## 3. Getting the holds back onto the signal
 
 ```bash
-python recorder.py merge recordings/S04_20261001_140319.csv
+python recorder.py merge recordings/S04_20261001/S04_20261001_140319.csv
 ```
 
 That writes `..._labelled.csv` — the same rows plus one `pose` column: the pose of
