@@ -309,7 +309,10 @@ has been within `CLEAN` of it and steady for `WATCH_S` = 3 s — before Record
 too. Only the plain clean test: telling leftover from a light foot needs the
 subject told to step off, which is the empty hold. And an empty hold right
 after Record, with no pose before it, now judges a band's drop against the
-load it saw during the hold itself. Press `D` to see how old the empty reading is.
+load it saw during the hold itself — only steady loaded seconds, never the
+leftover, or the level sinks toward it (test_20261110_143750: 2.TL sat
++250…+300 after the step-offs and the hold never went ready; it now goes ready
+9 s after the last step-off). Press `D` to see how old the empty reading is.
 
 The same creep shows in tree: the subject stands on both feet, then lifts one,
 and on Mat 2 the lifted foot's bands can stay +250…+400 for the hold (yj 10-01,

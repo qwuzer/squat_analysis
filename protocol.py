@@ -313,11 +313,9 @@ class Tracker:
         before = self._mean(t - 2, t - 1)
         if now is None or before is None or self.ref is None:
             return
-        if t >= self._hold_next:
+        second = t >= self._hold_next
+        if second:
             self._hold_next = t + 1
-            for b, v in now.items():
-                if v - self.ref[b] >= LOAD_ON:
-                    self._hold_loaded.setdefault(b, []).append(v)
         clean = True
         for b, v in now.items():
             steady = abs(v - before[b]) <= STEADY
@@ -330,6 +328,8 @@ class Tracker:
             else:
                 st = 'settling'
             self.state[b] = st
+            if second and st == 'loaded':      # never the leftover itself, or
+                self._hold_loaded.setdefault(b, []).append(v)  # it drags this down
             clean = clean and st in ('clean', 'offset')
         if not clean:
             self._clean = []
