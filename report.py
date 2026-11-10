@@ -64,7 +64,7 @@ def label(pose):
 
 
 def is_event(pose):
-    """Touch-downs are instants logged in the holds file, not holds."""
+    """Touch-downs and marks are instants in the holds file, not holds."""
     return pose in R.EVENTS
 
 

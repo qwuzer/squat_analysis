@@ -33,7 +33,7 @@ import time
 # `not ready`. Read by name, so files without the column still load.
 HOLD_COLUMNS = ['pose', 'start_s', 'end_s', 'footprint']
 DISCARDED = '_discarded'
-EVENTS = ('touchdown',)          # instants (start_s == end_s), not holds
+EVENTS = ('touchdown', 'mark')  # instants (start_s == end_s), not holds
 
 
 def clock_str(t):

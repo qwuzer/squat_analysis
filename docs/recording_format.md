@@ -43,7 +43,7 @@ body weights).
 | --- | --- |
 | `Space` | empty hold, mat ready → start the next pose; pose → end it and start an empty hold. Before the mat is ready it asks for a second press |
 | `X` | during a pose: it failed — end it as discarded, the step stays to redo. Between poses: discard the hold just saved (press twice) |
-| `T` | log a touch-down (raised foot touching the mat), during a pose |
+| `T` | during a pose: log a touch-down (raised foot touching the mat). Otherwise, while recording: log a `mark`, a moment to look at with `debug_map.py` |
 | `S` | flip the side the staff call, for dog B (which hand) and bridge A (which foot) |
 | `←` `→` | move through the script without recording |
 | `Z` | take the mat as it is now as empty — between recordings only |
@@ -84,7 +84,7 @@ recordings/elijio_20261006/
 Pose names are `<pose>_<condition>`, from `protocol.py`: `tree_R_correct`,
 `tree_R_A`, `lunge_L_B`; the two errors where staff pick a side carry it,
 `dog_B_L`, `bridge_A_R`. A discarded hold ends in `_discarded`. Empty holds
-are `empty`; `touchdown` rows are instants (`start_s == end_s`), not holds.
+are `empty`; `touchdown` and `mark` rows are instants (`start_s == end_s`), not holds.
 Recordings from before Nov 2026 use the old names (`standing`, `tree_L`,
 `tree_L_eyes_closed`).
 
@@ -109,6 +109,22 @@ hold minus its first 3 s, or 4–9 s after each pose if they predate empty
 holds. The poses sheet is one video frame from the middle of every hold, in
 order.
 Needs `matplotlib` and `opencv-python`.
+
+### Debugging the map — `debug_map.py`
+
+When the map shows something you don't believe (a band lit with nobody on it,
+a percentage that lingers after a foot comes off), record it — press **T** at
+each moment to look at — then:
+
+```bash
+python debug_map.py recordings/S01_20261110/S01_20261110_140000.csv
+```
+
+It replays the recording through the same logic the live map uses and writes
+`<name>_debug.png`: one row per band, its load above the empty reading the map
+was using at that moment, the 250-count threshold, ▼ where the empty reading
+was replaced, and a strip under each band of what the map showed (green ok,
+orange extra, red missing, grey offset). T presses are orange lines.
 
 ### `<name>.csv` — the signal
 

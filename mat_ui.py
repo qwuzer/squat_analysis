@@ -112,6 +112,7 @@ VIDEO_SIZE   = (1280, 720)   # written size — enough to see the pose, ~25 MB/m
 
 EMPTY = 'empty'
 TOUCHDOWN = 'touchdown'
+MARK = 'mark'           # T outside a pose: a moment to look at in debug_map.py
 FOOTPRINT_OK = 0.9     # share of a hold the footprint must match to log `ok`
 CONFIRM_S = 3.0        # a second press within this confirms (Space early, X)
 FULL_LOAD = 1000       # counts above empty at which a band's fill is darkest
@@ -818,9 +819,13 @@ class App:
 
     def _touchdown(self):
         h = self._hold
-        if not (self._recorder.active and h and h['name'] != EMPTY):
+        if not self._recorder.active:
             return
         t = self._recorder.elapsed
+        if not (h and h['name'] != EMPTY):
+            self._recorder.add_hold(MARK, t, t)
+            self._say(f'mark logged at {t:.1f} s', WARN_COL, 2)
+            return
         self._recorder.add_hold(TOUCHDOWN, t, t)
         self._touches += 1
         self._say(f'touch-down logged at {t - h["start"]:.1f} s', WARN_COL, 2)
