@@ -14,11 +14,14 @@ Writes two files next to the session:
 
 mat_ui runs this automatically after Stop, in its own low-priority process.
 
-Balance is measured against the empty hold just before each pose, not the one
-from the start: after the first step-off the mat keeps ~2,000 counts it does
-not give back, which against the start reading pulls tree from ±1.0 to ±0.4
-(docs/findings.md 8.10). Total load is still shown against the start reading,
-so that offset stays visible.
+Load is measured against the empty hold just before each pose, not the one
+from the start: on some days the mat keeps ~2,000 counts after the first
+step-off, which against the start reading pulls tree from ±1.0 to ±0.4
+(docs/findings.md 8.10).
+
+Poses span all three mats (Mat 1 front, Mat 2 middle, Mat 3 back), so balance
+is over all twelve bands: left/right as a −1…+1 ratio, and front/back as a
+position along the row in cm, gaps between mats included.
 """
 
 import csv
@@ -34,23 +37,35 @@ import recorder as R
 HERE = os.path.dirname(os.path.abspath(__file__))
 RECORD_DIR = os.path.join(HERE, 'recordings')
 
-# Mat 2's bands (TL, TR, BL, BR) — the mat the protocol uses. Kept here rather
-# than imported from mat_ui so this runs without tkinter or serial.
-MAT_IN_USE = 'Mat 2'
-
 SURF, INK, INK2, MUTED, GRID = '#fcfcfb', '#0b0b0b', '#52514e', '#8a8984', '#e6e5e1'
-BAND_COLS = ('#2a78d6', '#eb6834', '#1baf7a', '#eda100')
-BAND_NAMES = ('TL', 'TR', 'BL', 'BR')
-REST_COL, HOLD_COL = '#e3eefb', '#efeee9'
+MAT_COLS = ('#2a78d6', '#eb6834', '#1baf7a')       # Mat 1 front, 2 middle, 3 back
+REST_COL, HOLD_COL, BAD_COL = '#e3eefb', '#efeee9', '#f7dede'
 EYES = '_eyes_closed'
+# where each band sits along the row, cm from the front edge: 50 cm mats,
+# 12.5 cm gaps, front band a quarter of the way in, back band three quarters
+MAT_CM, GAP_CM = 50.0, 12.5
+BANDS = ('TL', 'TR', 'BL', 'BR')
+ROW_CM = {(m, b): m * (MAT_CM + GAP_CM) + (0.26 if b[0] == 'T' else 0.74) * MAT_CM
+          for m in range(3) for b in BANDS}
+ROW_LEN = 3 * MAT_CM + 2 * GAP_CM
 
 
 def label(pose):
-    """Display name: empty -> rest, tree_L_eyes_closed -> tree L (eyes closed)."""
+    """Display name: empty -> rest, tree_R_correct -> tree R, tree_R_A ->
+    tree R A, dog_B_L -> dog B L; older names: tree_L_eyes_closed -> tree L
+    (eyes closed). A discarded hold says so."""
+    bad = pose.endswith(R.DISCARDED)
+    pose = pose[:-len(R.DISCARDED)] if bad else pose
     closed = pose.endswith(EYES)
     base = pose[:-len(EYES)] if closed else pose
+    base = base.replace('_correct', '')
     text = 'rest' if base == 'empty' else base.replace('_', ' ')
-    return text + (' (eyes closed)' if closed else '')
+    return text + (' (eyes closed)' if closed else '') + (' (discarded)' if bad else '')
+
+
+def is_event(pose):
+    """Touch-downs and marks are instants in the holds file, not holds."""
+    return pose in R.EVENTS
 
 
 def load(csv_path):
@@ -60,11 +75,27 @@ def load(csv_path):
     meta = json.load(open(base + '.json', encoding='utf-8'))
     holds_path = base + '_holds.csv'
     holds = R.load_holds(holds_path) if os.path.exists(holds_path) else []
+    meta['_ready'] = ready_windows(holds_path)
     return a[:, 0], a[:, 1:], holds, meta
 
 
-def empty_windows(t, holds):
-    """[(start, end)] of usable empty readings: each empty hold minus its first
+def ready_windows(holds_path):
+    """{empty-hold start_s: (a, b)} from the `ready a-b` the app logs."""
+    out = {}
+    if not os.path.exists(holds_path):
+        return out
+    with open(holds_path, newline='', encoding='utf-8') as fh:
+        for r in csv.DictReader(fh):
+            fp = r.get('footprint') or ''
+            if r['pose'] == 'empty' and fp.startswith('ready '):
+                a, b = fp[6:].split('-')
+                out[float(r['start_s'])] = (float(a), float(b))
+    return out
+
+
+def empty_windows(t, holds, ready=None):
+    """[(start, end)] of usable empty readings: the clean stretch the app
+    logged for each empty hold (`ready a-b`), else the hold minus its first
     3 s (the step-off), or before the first hold if it is not an empty one.
 
     Sessions recorded before empty holds were automatic have bare gaps between
@@ -73,7 +104,11 @@ def empty_windows(t, holds):
     wins = []
     prev_end = None
     for pose, s0, s1 in holds:
-        if pose == 'empty' and s1 - s0 > 4:
+        if pose == 'empty' and s0 in (ready or {}):
+            # the stretch the live check zeroed on: since Nov 2026 the subject
+            # steps back on before the empty hold ends, so its tail is not empty
+            wins.append(ready[s0])
+        elif pose == 'empty' and s1 - s0 > 4:
             wins.append((s0 + 3, s1 - 0.5))
         elif prev_end is not None and s0 - prev_end > 10:
             wins.append((prev_end + 4, min(prev_end + 9, s0 - 3)))
@@ -107,83 +142,104 @@ def graph(csv_path, out_path):
         'axes.spines.top': False, 'axes.spines.right': False,
         'figure.facecolor': SURF, 'axes.facecolor': SURF})
 
-    t, ch, holds, meta = load(csv_path)
-    mats = meta['mat_channels']
-    B = mats[MAT_IN_USE]
-    wins = empty_windows(t, holds)
+    t, ch, all_holds, meta = load(csv_path)
+    holds = [h for h in all_holds if not is_event(h[0])]
+    events = [h for h in all_holds if is_event(h[0])]
+    mats = list(meta['mat_channels'].items())
+    layout = meta.get('mat_layout', {})
+    wins = empty_windows(t, holds, meta['_ready'])
     if not wins:
         raise ValueError('no empty reading to measure against')
-    base, first = baselines(t, ch[:, B], wins)
+    base, _ = baselines(t, ch, wins)
+    net = np.clip(ch - base, 0, None)                      # vs the latest empty
 
-    total0 = (ch[:, B] - first).sum(1)                    # vs the start reading
-    pos = np.clip(ch[:, B] - base, 0, None)                # vs the latest empty
-    tot = pos.sum(1)
+    per_mat = np.stack([net[:, chans].sum(1) for _, chans in mats], 1)
+    tot = per_mat.sum(1)
     on = tot > 0.35 * np.percentile(tot, 95)
-    x = np.where(on, (pos[:, 1] + pos[:, 3] - pos[:, 0] - pos[:, 2])
-                 / np.maximum(tot, 1), np.nan)
-    y = np.where(on, (pos[:, 0] + pos[:, 1] - pos[:, 2] - pos[:, 3])
-                 / np.maximum(tot, 1), np.nan)
+    left = sum(net[:, chans[i]] for _, chans in mats for i in (0, 2))
+    right = sum(net[:, chans[i]] for _, chans in mats for i in (1, 3))
+    x = np.where(on, (right - left) / np.maximum(tot, 1), np.nan)
+    along = sum(net[:, chans[i]] * ROW_CM[m, b]
+                for m, (_, chans) in enumerate(mats) for i, b in enumerate(BANDS))
+    y = np.where(on, along / np.maximum(tot, 1), np.nan)
 
-    fig, axs = plt.subplots(4, 1, figsize=(16, 12), sharex=True, gridspec_kw=dict(
-        height_ratios=[1.3, 1, 1, 1], hspace=0.38))
+    width = float(np.clip(t[-1] / 100, 16, 48))       # long sessions get room
+    many = len(holds) > 24                             # labels turn sideways
+    fig, axs = plt.subplots(4, 1, figsize=(width, 13), sharex=True,
+                            gridspec_kw=dict(height_ratios=[1.2, 1, 0.8, 1],
+                                             hspace=0.42))
     for k, ax in enumerate(axs):
         for pose, s0, s1 in holds:
             rest = pose == 'empty'
-            ax.axvspan(s0, s1, color=REST_COL if rest else HOLD_COL, lw=0,
-                       zorder=0)
-            if k == 0:
+            colour = (BAD_COL if pose.endswith(R.DISCARDED) else
+                      REST_COL if rest else HOLD_COL)
+            ax.axvspan(s0, s1, color=colour, lw=0, zorder=0)
+            if k == 0 and not rest:
                 ax.text((s0 + s1) / 2, 1.02, label(pose),
                         transform=ax.get_xaxis_transform(), ha='center',
-                        va='bottom', fontsize=8.5 if rest else 9.5,
-                        color=MUTED if rest else INK,
-                        fontweight='normal' if rest else 'bold')
+                        va='bottom', fontsize=8 if many else 9.5, color=INK,
+                        rotation=90 if many else 0)
+        for _, s0, _ in events:
+            ax.axvline(s0, color='#eda100', lw=1.2, zorder=1)
         ax.grid(axis='y', color=GRID, lw=0.8)
         ax.set_xlim(0, t[-1])
 
     ax = axs[0]
-    for name, chans in mats.items():
-        if name != MAT_IN_USE:
-            for c in chans:
-                ax.plot(t, ch[:, c], color='#d3d2cc', lw=0.7)
-    for n, c, col in zip(BAND_NAMES, B, BAND_COLS):
-        ax.plot(t, ch[:, c], color=col, lw=1.2, label=f'{n} (ch{c})')
+    for (name, chans), col in zip(mats, MAT_COLS):
+        for j, c in enumerate(chans):
+            ax.plot(t, ch[:, c], color=col, lw=0.9,
+                    label=f'{name} {layout.get(name, "")}'.strip() if j == 0 else None)
     ax.set_ylabel('raw counts')
-    ax.legend(loc='lower right', ncol=4, frameon=False, fontsize=9)
-    ax.set_title(f'1 · Raw counts — {MAT_IN_USE} in colour, other mats grey',
-                 loc='left', fontsize=11, color=INK, pad=22)
+    ax.legend(loc='lower right', ncol=3, frameon=False, fontsize=9)
+    ax.set_title('1 · Raw counts, every band', loc='left', fontsize=11,
+                 color=INK, pad=90 if many else 22)
 
     ax = axs[1]
-    ax.plot(t, total0, color='#2a78d6', lw=1.3)
+    for k, ((name, _), col) in enumerate(zip(mats, MAT_COLS)):
+        ax.plot(t, per_mat[:, k], color=col, lw=1.3, label=name)
     ax.axhline(0, color=MUTED, lw=1)
     ax.set_ylabel('counts above empty')
-    ax.set_title(f'2 · Total load on {MAT_IN_USE}, against the first empty '
-                 'reading', loc='left', fontsize=11, color=INK)
+    ax.legend(loc='upper right', ncol=3, frameon=False, fontsize=9)
+    ax.set_title('2 · Load on each mat, against the empty hold before each pose',
+                 loc='left', fontsize=11, color=INK)
 
-    for ax, v, ylab, title in (
-            (axs[2], x, 'left ← → right',
-             '3 · Left / right balance, against the empty hold before each pose'),
-            (axs[3], y, 'back ← → front', '4 · Front / back balance')):
-        ax.plot(t, v, color='#2a78d6', lw=1.3)
-        ax.axhline(0, color=MUTED, lw=1)
-        ax.set_ylim(-1.05, 1.05)
-        ax.set_ylabel(ylab)
-        ax.set_title(title, loc='left', fontsize=11, color=INK)
+    ax = axs[2]
+    ax.plot(t, x, color='#2a78d6', lw=1.3)
+    ax.axhline(0, color=MUTED, lw=1)
+    ax.set_ylim(-1.05, 1.05)
+    ax.set_ylabel('left ← → right')
+    ax.set_title('3 · Left / right balance, all bands', loc='left', fontsize=11,
+                 color=INK)
+
+    ax = axs[3]
+    for m in range(3):                         # each mat as a band of the axis
+        lo = m * (MAT_CM + GAP_CM)
+        ax.axhspan(lo, lo + MAT_CM, color=MAT_COLS[m], alpha=0.07, lw=0)
+    ax.plot(t, y, color='#2a78d6', lw=1.3)
+    ax.set_ylim(ROW_LEN, 0)                    # front of the row at the top
+    ax.set_ylabel('cm from the front')
+    ax.set_title('4 · Where the load sits along the row (front mat at the top)',
+                 loc='left', fontsize=11, color=INK)
     axs[3].set_xlabel('seconds since Record')
 
     si = meta.get('subject_info', {})
     name = os.path.basename(csv_path)[:-4]
+
     def val(k):
-        return '?' if si.get(k) is None else f'{si[k]:g}' if k != 'experience' else si[k]
-    fig.suptitle(f"{name} — {val('weight_kg')} kg, {val('height_cm')} cm, "
-                 f"experience {val('experience')} — blue = rest (empty), "
-                 'grey = poses', x=0.01, ha='left', fontsize=13,
-                 fontweight='bold', color=INK, y=0.995)
-    fig.subplots_adjust(left=0.06, right=0.99, top=0.93, bottom=0.05)
-    fig.savefig(out_path, dpi=110)
+        v = si.get(k)
+        return '?' if v is None else f'{v:g}' if isinstance(v, (int, float)) else v
+    fig.suptitle(f"{name} — session {val('session')}, {val('weight_kg')} kg, "
+                 f"{val('height_cm')} cm, experience {val('experience')} — "
+                 'blue = rest, grey = pose, red = discarded, orange line = touch-down',
+                 x=0.01, ha='left', fontsize=13, fontweight='bold', color=INK,
+                 y=0.995)
+    fig.subplots_adjust(left=0.05, right=0.99, top=0.88 if many else 0.93,
+                        bottom=0.05)
+    fig.savefig(out_path, dpi=100)
     plt.close(fig)
 
 
-def poses_sheet(csv_path, out_path, cols=4, tile=(480, 270)):
+def poses_sheet(csv_path, out_path, cols=6, tile=(400, 225)):
     """One frame from the middle of every hold, in order. Returns False when
     the session has no video."""
     import cv2
@@ -192,7 +248,7 @@ def poses_sheet(csv_path, out_path, cols=4, tile=(480, 270)):
         return False
     with open(base + '_frames.csv', newline='') as fh:
         el = np.array([float(r['elapsed_s']) for r in csv.DictReader(fh)])
-    holds = R.load_holds(base + '_holds.csv')
+    holds = [h for h in R.load_holds(base + '_holds.csv') if not is_event(h[0])]
     if not len(el) or not holds:
         return False
     cap = cv2.VideoCapture(base + '.mp4')
@@ -206,7 +262,7 @@ def poses_sheet(csv_path, out_path, cols=4, tile=(480, 270)):
                                                    np.uint8)
         text = f'{label(pose)} {seen[pose]}  ·  {mid:.0f} s'
         cv2.rectangle(f, (0, 0), (tile[0], 30), (255, 255, 255), -1)
-        cv2.putText(f, text, (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+        cv2.putText(f, text, (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                     (0, 0, 0), 1, cv2.LINE_AA)
         tiles.append(f)
     cap.release()

@@ -6,7 +6,7 @@ a uniform grid, a wall-clock `Time` column in `H-MM-SS.fff`, one column per
 channel. Three files per session:
 
     <name>.csv          the signal
-    <name>_holds.csv    one row per hold: pose, start_s, end_s
+    <name>_holds.csv    one row per hold: pose, start_s, end_s, footprint
     <name>.json         session metadata and per-port frame counts
 
 Keeping metadata in a sidecar rather than repeating it on every row is the one
@@ -28,7 +28,12 @@ import threading
 import time
 
 
-HOLD_COLUMNS = ['pose', 'start_s', 'end_s']
+# footprint: what the live footprint check saw over the hold — `ok`, or the
+# problem it saw most (e.g. `missing 2.BR`); for an empty hold `ready` or
+# `not ready`. Read by name, so files without the column still load.
+HOLD_COLUMNS = ['pose', 'start_s', 'end_s', 'footprint']
+DISCARDED = '_discarded'
+EVENTS = ('touchdown', 'mark')  # instants (start_s == end_s), not holds
 
 
 def clock_str(t):
@@ -120,7 +125,7 @@ class Recorder:
         self._thread.start()
         return self.path
 
-    def add_hold(self, pose, start_s, end_s):
+    def add_hold(self, pose, start_s, end_s, footprint=''):
         """Append one completed hold. Times are elapsed_s, the same clock as the
         signal file, so a hold is every signal row with start_s <= t < end_s.
 
@@ -131,9 +136,30 @@ class Recorder:
         if self._holds_path is None:
             return False
         with open(self._holds_path, 'a', newline='', encoding='utf-8') as fh:
-            csv.writer(fh).writerow([pose, f'{start_s:.4f}', f'{end_s:.4f}'])
+            csv.writer(fh).writerow([pose, f'{start_s:.4f}', f'{end_s:.4f}',
+                                     footprint])
         self.holds += 1
         return True
+
+    def discard_last(self):
+        """Mark the most recent pose hold as discarded (`<pose>_discarded`) —
+        a fall, or the wrong pose. Kept rather than deleted: the signal of a
+        failed hold is still worth having. Returns the pose name, or None."""
+        if self._holds_path is None:
+            return None
+        with open(self._holds_path, newline='', encoding='utf-8') as fh:
+            rows = list(csv.reader(fh))
+        for row in reversed(rows[1:]):
+            pose = row[0]
+            if pose == 'empty' or pose in EVENTS:
+                continue
+            if pose.endswith(DISCARDED):
+                return None                    # already done; go no further back
+            row[0] = pose + DISCARDED
+            with open(self._holds_path, 'w', newline='', encoding='utf-8') as fh:
+                csv.writer(fh).writerows(rows)
+            return pose
+        return None
 
     def stop(self, port_stats=None, extra=None):
         """Stop, write the sidecars, and return the metadata that was written.

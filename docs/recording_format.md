@@ -7,34 +7,56 @@
 
 ## 1. Using it
 
-Run `python mat_ui.py`. The panel at the bottom has two rows.
+Run `python mat_ui.py`. The screen is built around running the collection
+script ([`collection_protocol.md`](collection_protocol.md)).
 
-**Session fields** — subject, weight, height, experience. Remembered in
-`mat_ui_settings.json` (local, gitignored — it holds body weights) and restored
-on the next launch.
+**Footprint** (left) — the three mats from above, front at the top, gaps to
+scale. Each band is filled by how far it sits above the empty reading taken
+just before the pose, with its share of the load in %, and stays lit for as
+long as the load is there. Colours say whether that matches the pose:
 
-**Pose buttons** — one per protocol condition. Keys **1–9** start a hold for
-that pose and **Space** ends it. **Empty holds are automatic**: one starts with
-Record, and Space on a pose starts another, so the file alternates
-empty / pose / empty. Space on an empty hold just ends it. Starting a new pose while one is running ends
-the current one first. Each button shows how many holds of that pose are done
-against the target (`tree L 2/3`); those counts are remembered per subject.
-They are an operator aid only — they are not written to the data.
-
-**Timer card** (top right):
-
-| Readout | Shows |
+| Band | Means |
 | --- | --- |
-| **Session** | time since Record, red while recording |
-| **Hold** | pose, which hold of the target, and elapsed vs target — turns green at the target |
-| **Rest** | after an empty hold is ended by hand, time since — turns green at 10 s |
+| green | the pose wants it, and it is loaded |
+| white, red dashed outline, `missing` | the pose wants it, and it is empty |
+| orange | loaded, but not part of the pose — a hand, a knee, the wrong band |
+| grey | empty, and should be |
+
+During an empty hold the map checks the mat is really empty instead: red `on`
+is a band still loaded, amber `…` is still settling, grey `offset` is a band
+the mat kept part of the load on (`findings.md` 8.10–8.11). The line under the
+map says it in words, large enough to read from the mat.
+
+**Protocol** (right) — the hold in progress or next: its name, a timer against
+its target (a beep at the target — one for a correct hold, two for an error),
+the guide's words to read out, and the whole script as a grid, ✓ done and ▶
+next. Progress is kept per subject and session across restarts; click a cell
+to jump to it, **reset progress** to start over.
+
+**Bottom bar** — subject ID (a list of the IDs already used, so a second day
+is spelled the same), session (1 or 2), weight, height, experience; Record;
+the Space button, which says what Space will do; discard and touch-down.
+Fields are remembered in `mat_ui_settings.json` (local, gitignored — it holds
+body weights).
 
 | Key | Does |
 | --- | --- |
-| `1`–`9` | start a hold |
-| `Space` | end the hold (and start an empty one) |
-| `E` | eyes closed on/off for the poses that follow |
-| `r` | re-zero the aligned chart |
+| `Space` | empty hold, mat ready → start the next pose; pose → end it and start an empty hold. Before the mat is ready it asks for a second press |
+| `X` | during a pose: it failed — end it as discarded, the step stays to redo. Between poses: discard the hold just saved (press twice) |
+| `T` | during a pose: log a touch-down (raised foot touching the mat). Otherwise, while recording: log a `mark`, a moment to look at with `debug_map.py` |
+| `S` | flip the side the staff call, for dog B (which hand) and bridge A (which foot) |
+| `←` `→` | move through the script without recording |
+| `Z` | take the mat as it is now as empty — between recordings only |
+| `D` | show raw and net counts on the bands, and how long ago the mat was zeroed |
+
+**The empty hold** starts with Record and after every pose. It is *ready* once
+every band has been clean for 7 s; that 7 s becomes the empty reading the next
+pose is measured against, and is written to the holds file. Ready stays ready:
+the subject stepping on afterwards is expected — that is when the map shows
+whether they are on the right bands, before Space starts the hold.
+Outside a timed pose — before Record too — the empty reading is also renewed
+whenever the whole mat has been plainly clean for 3 s, so drift does not pile
+up between empty holds (`findings.md` 8.12).
 
 Hotkeys are ignored while a text box has focus. **Closing the window while
 recording stops the recording first**, so the hold in progress and the sidecar
@@ -54,7 +76,7 @@ camera, plus the report.
 ```
 recordings/elijio_20261006/
   elijio_20261006_153536.csv          signal
-  elijio_20261006_153536_holds.csv    pose, start_s, end_s
+  elijio_20261006_153536_holds.csv    pose, start_s, end_s, footprint
   elijio_20261006_153536.json         metadata
   elijio_20261006_153536.mp4          video          (with a camera)
   elijio_20261006_153536_frames.csv   frame times    (with a camera)
@@ -62,8 +84,12 @@ recordings/elijio_20261006/
   elijio_20261006_153536_poses.jpg    a frame per hold (report.py, with video)
 ```
 
-Pose names are the presets' names, with `_eyes_closed` appended when the
-eyes-closed switch was on: `tree_L_eyes_closed`. Empty holds are `empty`.
+Pose names are `<pose>_<condition>`, from `protocol.py`: `tree_R_correct`,
+`tree_R_A`, `lunge_L_B`; the two errors where staff pick a side carry it,
+`dog_B_L`, `bridge_A_R`. A discarded hold ends in `_discarded`. Empty holds
+are `empty`; `touchdown` and `mark` rows are instants (`start_s == end_s`), not holds.
+Recordings from before Nov 2026 use the old names (`standing`, `tree_L`,
+`tree_L_eyes_closed`).
 
 ### The report — `<name>_report.png` and `<name>_poses.jpg`
 
@@ -75,13 +101,33 @@ python report.py recordings/elijio_20261006          # every recording in it
 python report.py --all                               # any that lack a report
 ```
 
-The graph is the raw bands, total load, and left/right and front/back balance,
-with rests shaded blue and poses grey. **Balance is measured against the empty
-hold just before each pose**, because the mat keeps ~2,000 counts after the
-first step-off (`findings.md` 8.10); recordings from before empty holds were
-automatic use 4–9 s after each pose instead. The poses sheet is one video frame
-from the middle of every hold, labelled rest / standing / tree L / … in order.
+The graph is every band raw, the load on each mat, left/right balance over all
+twelve bands, and where the load sits along the row in cm (front mat at the
+top, gaps included) — rests shaded blue, poses grey, discarded holds red,
+touch-downs as orange lines. **Load is measured against the empty hold just
+before each pose** — the exact 7 s the app zeroed on, read from the holds file
+— because the mat can keep ~2,000 counts after the first step-off
+(`findings.md` 8.10). Recordings from before that was logged use the empty
+hold minus its first 3 s, or 4–9 s after each pose if they predate empty
+holds. The poses sheet is one video frame from the middle of every hold, in
+order.
 Needs `matplotlib` and `opencv-python`.
+
+### Debugging the map — `debug_map.py`
+
+When the map shows something you don't believe (a band lit with nobody on it,
+a percentage that lingers after a foot comes off), record it — press **T** at
+each moment to look at — then:
+
+```bash
+python debug_map.py recordings/S01_20261110/S01_20261110_140000.csv
+```
+
+It replays the recording through the same logic the live map uses and writes
+`<name>_debug.png`: one row per band, its load above the empty reading the map
+was using at that moment, the 250-count threshold, ▼ where the empty reading
+was replaced, and a strip under each band of what the map showed (green ok,
+orange extra, red missing, grey offset). T presses are orange lines.
 
 ### `<name>.csv` — the signal
 
@@ -101,11 +147,19 @@ actually wants, and because comparing the two exposes clock problems.
 One row per hold:
 
 ```
-pose,start_s,end_s
-empty,0.0076,0.8198
-tree_L,1.1341,2.0612
-tree_R,2.0657,2.5951
+pose,start_s,end_s,footprint
+empty,0.0016,10.6700,ready 0.01-7.05
+tree_R_correct,10.6741,41.2210,ok
+empty,41.2251,54.1700,ready 43.12-50.15
+touchdown,63.9010,63.9010,
+tree_R_correct_discarded,54.1741,66.0200,missing 2.BR
 ```
+
+`footprint` is what the live check saw: for a pose, `ok` if the bands matched
+for at least 90 % of the hold, else the problem seen most (`missing 2.BR`,
+`extra 1.TL` — mat number, band); for an empty hold, `ready a-b`, the stretch
+that became the next pose's empty reading, or `not ready` if the operator
+started early. Files from before Nov 2026 have no such column.
 
 `start_s` and `end_s` are on the **same clock as `elapsed_s` in the signal
 file** — both start at 0 when Record is pressed. So a hold is exactly the signal
@@ -120,13 +174,14 @@ recoverable by sorting a subject's holds of that pose by start time. It will be
 needed (repeatability across holds 1–3 is the ICC metric), but it is derived,
 not stored.
 
-**These are raw button times.** A hold starts when the operator presses the key,
-i.e. when the subject is *told* to get into the pose, and ends when they are told
-to come out. So the first second or two is the transition in, and the last moment
-is the transition out — both fast, large movements. Feature extraction should
-use a trimmed window, `[start_s + trim, end_s − trim]`; the trim is a
-feature-extraction parameter to tune, which is exactly why it is not baked in
-here.
+**These are raw button times.** A hold starts when the operator presses Space
+with the subject already in the pose and settled, and ends when Space is
+pressed before they are told to come out — so getting on and off falls in the
+empty holds around it. Space is still pressed by a person, though: feature
+extraction should use a trimmed window, `[start_s + trim, end_s − trim]`; the
+trim is a feature-extraction parameter to tune, which is exactly why it is not
+baked in here. (Recordings from before Oct 2026 started holds when the subject
+was *told* the pose, so their first seconds are the transition in.)
 
 Labels live **outside** the signal file. In the bicep pipeline `Reps`, `RIR` and
 `actions` are columns bolted onto the signal, which means re-segmenting forces
@@ -304,6 +359,7 @@ A demo session recorded through the real UI:
   in this one.
 - **No video or EMG.** Those need a sync event recorded on every stream; see the
   data platform discussion.
-- **No way to discard a bad hold.** If a subject falls 4 s in, the hold is
-  still written and still counts on the button. Delete the row from
-  `_holds.csv` by hand for now.
+- **The footprint check knows bands, not feet.** It says which bands are
+  loaded, not whether it is the right foot on them; a subject standing on the
+  right bands in the wrong way still reads green. The video is the check for
+  that.

@@ -26,8 +26,15 @@ try:
 except ImportError:                                  # pyserial is not stdlib
     serial = None
 
-from mat_ui import (ARROW_MIN, BAUD, MAT_CHANNELS, MAT_LABELS, PORTS, RAW_MAX,
-                    RAW_MIN, SLOPE_DEADBAND, SLOPE_N, UPDATE_MS, _checked_body)
+from mat_ui import (BAUD, MAT_CHANNELS, MAT_LABELS, PORTS, RAW_MAX, RAW_MIN,
+                    UPDATE_MS, _checked_body)
+
+# The slope display these tune was removed from mat_ui in Nov 2026 (it is now a
+# footprint map against the empty hold). Its last settings are kept here so
+# the measurements below still compare against them.
+SLOPE_N        = 30    # samples in the slope window (~1.0 s at 30 fps)
+SLOPE_DEADBAND = 170   # counts/s below this read as flat
+ARROW_MIN      = 200   # counts/s of weight-shift arrow below which a mat is still
 
 
 # ── reader ────────────────────────────────────────────────────────────────────
