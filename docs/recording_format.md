@@ -47,13 +47,16 @@ body weights).
 | `S` | flip the side the staff call, for dog B (which hand) and bridge A (which foot) |
 | `←` `→` | move through the script without recording |
 | `Z` | take the mat as it is now as empty — between recordings only |
-| `D` | show raw and net counts on the bands |
+| `D` | show raw and net counts on the bands, and how long ago the mat was zeroed |
 
 **The empty hold** starts with Record and after every pose. It is *ready* once
 every band has been clean for 7 s; that 7 s becomes the empty reading the next
 pose is measured against, and is written to the holds file. Ready stays ready:
 the subject stepping on afterwards is expected — that is when the map shows
 whether they are on the right bands, before Space starts the hold.
+Outside a timed pose — before Record too — the empty reading is also renewed
+whenever the whole mat has been plainly clean for 3 s, so drift does not pile
+up between empty holds (`findings.md` 8.12).
 
 Hotkeys are ignored while a text box has focus. **Closing the window while
 recording stops the recording first**, so the hold in progress and the sidecar

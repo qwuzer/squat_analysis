@@ -900,7 +900,8 @@ class App:
                                  'experience': f['experience'] or None,
                                  'session': int(f['session'] or 1)},
                 'footprint_check': {'load_on': P.LOAD_ON, 'clean': P.CLEAN,
-                                    'drop': P.DROP, 'clean_s': P.CLEAN_S},
+                                    'drop': P.DROP, 'clean_s': P.CLEAN_S,
+                                    'watch_s': P.WATCH_S},
             })
             if self._video:
                 self._video.start(path[:-4], self._recorder.perf0)
@@ -1177,7 +1178,11 @@ class App:
             self._tracker.push(time.perf_counter(),
                                {b: float(self._data[ch]) for b, ch in BAND_CH.items()})
         fp, loaded = self._update_map()
-        self._show(self._verdict, *self._verdict_text(fp, loaded))
+        text, colour = self._verdict_text(fp, loaded)
+        z = self._tracker.zeroed_at
+        if self._details and z is not None:     # is the empty reading fresh?
+            text += f'   ·   zeroed {time.perf_counter() - z:.0f} s ago'
+        self._show(self._verdict, text, colour)
         self._update_protocol(fp, loaded)
         self._update_status()
 

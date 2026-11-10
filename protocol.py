@@ -185,6 +185,13 @@ DROP = 300
 DROP_FRAC = 0.3      # ...and at least this share of the band's load in the pose
 STEADY = 60          # counts: change between the last two 1-s means
 CLEAN_S = 7          # seconds of clean mat an empty hold needs
+# Outside a timed pose the empty reading is also renewed whenever every band
+# has been within CLEAN of it and steady for WATCH_S, so drift and the small
+# leftover after a step-off never pile up. Mat 2 drifted ~300 counts in 25 min
+# and keeps +150…+270 for 10 s after a step-off (test_20261110). Only the
+# plain clean test: telling leftover from a foot needs the subject told to
+# step off, which is the empty hold.
+WATCH_S = 3
 
 
 class Tracker:
@@ -195,19 +202,24 @@ class Tracker:
 
     An empty hold is `ready` once the mat has been clean for CLEAN_S; the last
     CLEAN_S of that stretch becomes the reference the next pose is measured
-    against. Ready latches: the subject stepping on afterwards is expected."""
+    against. Ready latches: the subject stepping on afterwards is expected.
+    Outside a timed pose the reference is also renewed after WATCH_S of a
+    plainly clean mat, before Record included."""
 
     def __init__(self):
         self.ref = None          # band -> empty reading the map is measured against
         self._hist = []          # (t, sample) over the last ~2.5 s
         self._pose_secs = []     # 1-s means during the current pose
         self._pose_level = {}    # band -> median of those, once the pose ends
+        self._hold_loaded = {}   # band -> 1-s means while loaded, this empty hold
+        self._hold_next = 0.0
         self._next_sec = None
         self._clean = []         # (t, sample) of the current clean stretch
         self.in_empty = False
         self.ready = False
         self.ready_window = None  # (t0, t1) of the stretch the reference came from
         self.state = {}          # band -> 'clean' | 'offset' | 'loaded' | 'settling'
+        self.zeroed_at = None    # when the reference was last renewed
 
     # ── feeding ──────────────────────────────────────────────────────────────
 
@@ -217,12 +229,14 @@ class Tracker:
             self._hist.pop(0)
         if self.ref is None and len(self._hist) >= 5:
             self.zero()
-        if self.in_empty:
-            if not self.ready:
-                self._empty_tick(t, sample)
-        elif self._next_sec is not None and t >= self._next_sec:
-            self._pose_secs.append(self._mean(t - 1, t + 1))
-            self._next_sec = t + 1
+        if self.in_empty and not self.ready:
+            self._empty_tick(t, sample)
+        elif self._next_sec is not None:           # a timed pose
+            if t >= self._next_sec:
+                self._pose_secs.append(self._mean(t - 1, t + 1))
+                self._next_sec = t + 1
+        else:
+            self._watch_tick(t, sample)
 
     def _mean(self, t0, t1):
         rows = [s for t, s in self._hist if t0 <= t < t1]
@@ -250,6 +264,7 @@ class Tracker:
     def zero(self):
         """Take the current level as empty (used at start-up, and on Z)."""
         self.ref = dict(self.level())
+        self.zeroed_at = self._hist[-1][0] if self._hist else None
 
     def start_empty(self):
         """A pose just ended (or Record was pressed): watch the mat empty.
@@ -262,6 +277,7 @@ class Tracker:
         self.in_empty, self.ready = True, False
         self.ready_window = None
         self._clean = []
+        self._hold_loaded, self._hold_next = {}, 0.0
         self.state = {}
 
     def start_pose(self):
@@ -269,6 +285,7 @@ class Tracker:
         (or the previous one, if the operator started before it was ready)."""
         self.in_empty = False
         self._pose_secs, self._next_sec = [], -1.0
+        self._clean = []
         self.state = {}
 
     def clean_s(self, t):
@@ -276,17 +293,31 @@ class Tracker:
             return float(CLEAN_S)
         return 0.0 if not self._clean else t - self._clean[0][0]
 
+    def _loaded_level(self, b):
+        """What the band read under load: the pose's, or — for the empty hold
+        after Record, or someone stepping on mid-hold — the median of this
+        hold's loaded seconds."""
+        if b in self._pose_level:
+            return self._pose_level[b]
+        secs = sorted(self._hold_loaded.get(b, ()))
+        return secs[len(secs) // 2] if len(secs) >= 2 else None
+
     def _dropped(self, b, v):
-        if b not in self._pose_level:
+        level = self._loaded_level(b)
+        if level is None:
             return False
-        drop = self._pose_level[b] - v
-        return drop >= max(DROP, DROP_FRAC * (self._pose_level[b] - self.ref[b]))
+        return level - v >= max(DROP, DROP_FRAC * (level - self.ref[b]))
 
     def _empty_tick(self, t, sample):
         now = self._mean(t - 1, t + 1)
         before = self._mean(t - 2, t - 1)
         if now is None or before is None or self.ref is None:
             return
+        if t >= self._hold_next:
+            self._hold_next = t + 1
+            for b, v in now.items():
+                if v - self.ref[b] >= LOAD_ON:
+                    self._hold_loaded.setdefault(b, []).append(v)
         clean = True
         for b, v in now.items():
             steady = abs(v - before[b]) <= STEADY
@@ -305,9 +336,29 @@ class Tracker:
             return
         self._clean.append((t, sample))
         if t - self._clean[0][0] >= CLEAN_S:
-            n = len(self._clean)
-            self.ref = {b: sum(s[b] for _, s in self._clean) / n
-                        for b in self._clean[0][1]}
             self.ready = True
-            self.ready_window = (self._clean[0][0], t)
+            self._take_ref(t)
+
+    def _watch_tick(self, t, sample):
+        now = self._mean(t - 1, t + 1)
+        before = self._mean(t - 2, t - 1)
+        if now is None or before is None or self.ref is None:
+            return
+        if not all(v - self.ref[b] < CLEAN and abs(v - before[b]) <= STEADY
+                   for b, v in now.items()):
             self._clean = []
+            return
+        self._clean.append((t, sample))
+        if t - self._clean[0][0] >= WATCH_S:
+            self._take_ref(t)
+
+    def _take_ref(self, t):
+        """The clean stretch becomes the empty reading. In an empty hold it is
+        also the window logged to the holds file, so the newest one wins."""
+        n = len(self._clean)
+        self.ref = {b: sum(s[b] for _, s in self._clean) / n
+                    for b in self._clean[0][1]}
+        if self.in_empty:
+            self.ready_window = (self._clean[0][0], t)
+        self.zeroed_at = t
+        self._clean = []

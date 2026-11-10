@@ -196,6 +196,7 @@ come from 8.11:
 | `DROP` / `DROP_FRAC` | 300 / 0.3 | …or one that fell this far from its pose level (the 8.10 offset) |
 | `STEADY` | 60 | counts between consecutive 1-s means for a band to be steady |
 | `CLEAN_S` | 7 | clean seconds an empty hold needs before the next pose |
+| `WATCH_S` | 3 | outside a timed pose, plainly clean seconds that renew the empty reading (8.12) |
 
 The slope settings below were the old display's. They are kept in `mat_log.py`,
 which still measures against them, and recorded here for the history.
@@ -283,6 +284,41 @@ step-off, and the footprint matches the pose for 93–100 % of the hold on
 changjian, huang1, elijio and Lu. yj's tree holds match less (9–78 %): the old
 protocol had feet together, so the standing foot often straddled the centre,
 and he wobbled and fell in tree R.
+
+### 8.12 Mat 2 creeps back slowly after a step-off
+
+Test 2026-11-10 (`test_20261110_*`, five recordings, the operator stepping on
+all four bands of one mat at a time). Each band against just before the step-on:
+
+| | step-offs | typical band 3 s after | worst |
+| --- | --- | --- | --- |
+| Mat 1 | 7 | +25 | back within ~3 s |
+| Mat 3 | 3 | +66 | back within ~6 s |
+| **Mat 2** | 13 | +63 | **+150…+270, still there 10 s later** |
+
+Mat 2's empty level also wandered ~300 counts over the 25 min, against ~100
+for Mats 1 and 3. It is the mat every standing pose has used, and the one with
+the 8.10 offsets. Raising `LOAD_ON` does not separate this: spread over four
+bands, a band under a foot read as little as +200…+350, overlapping the
+leftover. What the operator saw above 250 live was mostly a stale empty
+reading: the app re-zeroed only when an empty hold went ready, and before
+Record never, so drift and leftover piled up.
+
+So, outside a timed pose, the empty reading is now renewed whenever every band
+has been within `CLEAN` of it and steady for `WATCH_S` = 3 s — before Record
+too. Only the plain clean test: telling leftover from a light foot needs the
+subject told to step off, which is the empty hold. And an empty hold right
+after Record, with no pose before it, now judges a band's drop against the
+load it saw during the hold itself. Press `D` to see how old the empty reading is.
+
+The same creep shows in tree: the subject stands on both feet, then lifts one,
+and on Mat 2 the lifted foot's bands can stay +250…+400 for the hold (yj 10-01,
+changjian's last tree R). Re-zeroing cannot help — nobody steps off. Across the
+five old sessions the lifted foot's bands sit at p90 ≤ +124 except yj (+336),
+and a standing foot's at p5 ≥ +430, so 250 stays. If Mat 2 keeps doing this,
+move it to the back position (feet only in lunge, dog and plank). Swapping it
+with Mat 3 on the floor, each keeping its cable, also shows whether the sheet
+or its board is at fault.
 
 ## 9. What we are missing
 
