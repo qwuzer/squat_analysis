@@ -185,7 +185,21 @@ goes stale gradually and must be recaptured each session.
 
 ## 7. Current settings
 
-All in `mat_ui.py`. Tuned from recordings **B and C**, not from the empty mat.
+**Since Nov 2026 the app has no slope display.** It shows a footprint map
+against the empty hold before each pose; its settings are in `protocol.py` and
+come from 8.11:
+
+| Constant | Value | Meaning |
+| --- | --- | --- |
+| `LOAD_ON` | 250 | counts above the empty reading at which a band reads loaded |
+| `CLEAN` | 250 | an empty-hold band within this of the last empty reading is clean |
+| `DROP` / `DROP_FRAC` | 300 / 0.3 | …or one that fell this far from its pose level (the 8.10 offset) |
+| `STEADY` | 60 | counts between consecutive 1-s means for a band to be steady |
+| `CLEAN_S` | 7 | clean seconds an empty hold needs before the next pose |
+
+The slope settings below were the old display's. They are kept in `mat_log.py`,
+which still measures against them, and recorded here for the history.
+Tuned from recordings **B and C**, not from the empty mat.
 
 | Constant | Value | Meaning |
 | --- | --- | --- |
@@ -234,6 +248,41 @@ all four bands and pulls ratios toward 0: elijio's tree reads x = ±0.4. Against
 the middle of the rest before each hold it reads **±1.0**, matching Lu. So:
 **each hold's empty reading must come from just before it** — which is why the
 app now records an empty hold automatically between poses.
+
+It depends on the day. changjian and huang1 (10-30) came back within ±250 of
+the first empty reading after every step-off; elijio and yj stayed +400…+800
+per band. Where it happens, it happens at the first step-off and then holds
+(±150 between later rests).
+
+### 8.11 Telling a loaded band from an empty one, live
+
+The footprint map (`protocol.py`, Nov 2026) needs "is this band loaded?" per
+band, during a held pose — which the old slope display could not answer, since
+a still pose has no slope. Measured on changjian, huang1, elijio and yj against
+the empty hold just before each pose:
+
+| | counts above that empty reading |
+| --- | --- |
+| band under a foot | **+470 … +1,300** |
+| band with nothing on it | **−110 … +120** (each mat drifts as one) |
+
+So **250** separates them with room both sides. Fluctuation does not help: a
+band someone stands still on wobbles as little as an empty one (1-s std, p5
+≈ 6 counts for both).
+
+The empty check (is the subject fully off?) is the harder half, because of
+8.10: after the first step-off a band may sit +400…+800 high with nobody on
+it. A band counts as clean when it is back within 250 of the last empty
+reading and steady (1-s means within 60), **or** when it has dropped at least
+300 counts and 30 % of its load in the pose and is steady — a foot left on a
+band does not drop (weight moves onto it, if anything). elijio's smallest such
+drop was 360. Seven clean seconds make the next empty reading.
+
+Replayed through the five recordings: the mat reads ready 8–12 s after a
+step-off, and the footprint matches the pose for 93–100 % of the hold on
+changjian, huang1, elijio and Lu. yj's tree holds match less (9–78 %): the old
+protocol had feet together, so the standing foot often straddled the centre,
+and he wobbled and fell in tree R.
 
 ## 9. What we are missing
 
