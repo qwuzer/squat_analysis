@@ -192,6 +192,11 @@ CLEAN_S = 7          # seconds of clean mat an empty hold needs
 # plain clean test: telling leftover from a foot needs the subject told to
 # step off, which is the empty hold.
 WATCH_S = 3
+# A band's first step-off after a pose loaded it takes whatever steady level it
+# settles to as its empty reading, however high. On test_20261112 Mat 2 kept
+# +400…+700 per band after a stand, 70–90% of its load: no drop rule can tell
+# that from a foot. Where it happens it happens once, at the first step-off,
+# and then holds (8.10), so the later empty holds keep the normal check.
 
 
 class Tracker:
@@ -220,6 +225,7 @@ class Tracker:
         self.ready_window = None  # (t0, t1) of the stretch the reference came from
         self.state = {}          # band -> 'clean' | 'offset' | 'loaded' | 'settling'
         self.zeroed_at = None    # when the reference was last renewed
+        self.stepped_off = set()  # bands whose first step-off has been taken
 
     # ── feeding ──────────────────────────────────────────────────────────────
 
@@ -308,6 +314,14 @@ class Tracker:
             return False
         return level - v >= max(DROP, DROP_FRAC * (level - self.ref[b]))
 
+    def _first_off(self, b, v):
+        """The pose loaded this band, it has never been stepped off before,
+        and it now reads below its level in the pose: what it keeps is the
+        mat, not a foot."""
+        level = self._pose_level.get(b)
+        return (b not in self.stepped_off and level is not None
+                and level - self.ref[b] >= LOAD_ON and v <= level - STEADY)
+
     def _empty_tick(self, t, sample):
         now = self._mean(t - 1, t + 1)
         before = self._mean(t - 2, t - 1)
@@ -321,7 +335,7 @@ class Tracker:
             steady = abs(v - before[b]) <= STEADY
             if v - self.ref[b] < CLEAN and steady:
                 st = 'clean'
-            elif steady and self._dropped(b, v):
+            elif steady and (self._dropped(b, v) or self._first_off(b, v)):
                 st = 'offset'          # the mat kept part of the load
             elif v - self.ref[b] >= LOAD_ON:
                 st = 'loaded' if steady else 'settling'
@@ -337,6 +351,8 @@ class Tracker:
         self._clean.append((t, sample))
         if t - self._clean[0][0] >= CLEAN_S:
             self.ready = True
+            self.stepped_off |= {b for b, v in self._pose_level.items()
+                                 if v - self.ref[b] >= LOAD_ON}
             self._take_ref(t)
 
     def _watch_tick(self, t, sample):

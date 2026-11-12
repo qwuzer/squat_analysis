@@ -71,6 +71,12 @@ walks through the script, so there is no label to choose.
 6. Press **Space**, *then* say "release". An empty hold starts at once; they
    step off. Wait for ready again, and so on.
 
+**The first step-off from each mat matters most** (after the first mountain;
+after the first lunge for the front and back mats). Whatever the mat reads
+then becomes its empty reading for the session, because the middle mat can
+keep most of the load (`findings.md` 8.12). Make sure the subject is fully off
+— both feet on the floor beside the row — before the app reads ready.
+
 **If they fall or put a foot down for good:** press **X** — the hold is kept
 as discarded and the step stays to redo. A brief touch of the raised foot in
 tree: press **T** and let them carry on. Discarded a good hold, or noticed a

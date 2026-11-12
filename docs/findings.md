@@ -193,7 +193,7 @@ come from 8.11:
 | --- | --- | --- |
 | `LOAD_ON` | 250 | counts above the empty reading at which a band reads loaded |
 | `CLEAN` | 250 | an empty-hold band within this of the last empty reading is clean |
-| `DROP` / `DROP_FRAC` | 300 / 0.3 | …or one that fell this far from its pose level (the 8.10 offset) |
+| `DROP` / `DROP_FRAC` | 300 / 0.3 | …or one that fell this far from its pose level (the 8.10 offset). At a band's first step-off in a recording, any steady fall below its pose level will do (8.12) |
 | `STEADY` | 60 | counts between consecutive 1-s means for a band to be steady |
 | `CLEAN_S` | 7 | clean seconds an empty hold needs before the next pose |
 | `WATCH_S` | 3 | outside a timed pose, plainly clean seconds that renew the empty reading (8.12) |
@@ -322,6 +322,26 @@ and a standing foot's at p5 ≥ +430, so 250 stays. If Mat 2 keeps doing this,
 move it to the back position (feet only in lunge, dog and plank). Swapping it
 with Mat 3 on the floor, each keeping its cable, also shows whether the sheet
 or its board is at fault.
+
+**Test 2026-11-12: the leftover can be most of the load.** One foot or both on
+Mat 2, then off to stand on Mats 1 and 3 (`test_20261112_143229`, video
+checked). After the first step-off every Mat 2 band kept **+340…+670**, against
+a load of +620…+940 in the stand, and it barely moved for 12 s. A drop of only
+150–190 on 2.TL and 2.BL: under `DROP`, so the empty hold would never have gone
+ready. The second step-off settled within ±250 of the first (2.TR +240), as in
+8.10. Mats 1 and 3 came back within +150.
+
+No amplitude rule can tell this from a foot. What does: it happens once. So a
+band's **first step-off in a recording** after a pose that loaded it counts as
+offset as soon as it is steady anywhere below its pose level, and whatever it
+settles to is its empty reading from then on. Later step-offs keep the normal
+check. In practice Mat 2's comes after the first mountain hold; Mats 1 and 3's
+after the first lunge. Replayed: the five old sessions and the 11-10 tests are
+unchanged, and ending each of their 27 poses halfway, with the subject still on
+the mat, never reads ready (a foot left on a band does not fall below its pose
+level). The risk is the operator's: at the first step-off the subject must be
+fully off, or the foot becomes the empty reading. If it does, the band reads
+negative once the foot leaves, and the clean renewal fixes it within 3 s.
 
 ## 9. What we are missing
 
