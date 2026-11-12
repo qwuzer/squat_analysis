@@ -24,7 +24,7 @@ long as the load is there. Colours say whether that matches the pose:
 
 During an empty hold the map checks the mat is really empty instead: red `on`
 is a band still loaded, amber `…` is still settling, grey `offset` is a band
-the mat kept part of the load on (`findings.md` 8.10–8.11). The line under the
+the mat kept part of the load on (`findings.md` 8.10–8.12). The line under the
 map says it in words, large enough to read from the mat.
 
 **Protocol** (right) — the hold in progress or next: its name, a timer against

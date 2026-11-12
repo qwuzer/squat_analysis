@@ -907,7 +907,9 @@ class App:
                 self._video.start(path[:-4], self._recorder.perf0)
             self._style_record_btn(True)
             # the subject is off the mat when Record is pressed, so the
-            # session opens with its empty reading
+            # session opens with its empty reading; each recording gets its own
+            # first step-off (protocol.py, above Tracker)
+            self._tracker.stepped_off.clear()
             self._start(EMPTY)
             self._say(f'recording to {os.path.basename(path)}')
             self._subject.config(values=self._known_subjects())
