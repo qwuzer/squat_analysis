@@ -17,25 +17,24 @@ long as the load is there. Colours say whether that matches the pose:
 
 | Band | Means |
 | --- | --- |
-| green | the pose wants it, and it is loaded |
-| white, red dashed outline, `missing` | the pose wants it, and it is empty |
+| green | loaded, and the pose needs or allows it (dog's other hand row, the twist's resting leg) |
+| white, red dashed outline, `missing` | the pose needs it, and it is empty |
 | orange | loaded, but not part of the pose — a hand, a knee, the wrong band |
 | grey | empty, and should be |
 
 During an empty hold the map checks the mat is really empty instead: red `on`
 is a band still loaded, amber `…` is still settling, grey `offset` is a band
-the mat kept part of the load on (`findings.md` 8.10–8.11). The line under the
-map says it in words, large enough to read from the mat.
+the mat kept part of the load on (`findings.md` 8.10–8.12).
 
 **Protocol** (right) — the hold in progress or next: its name, a timer against
 its target (a beep at the target — one for a correct hold, two for an error),
-the guide's words to read out, and the whole script as a grid, ✓ done and ▶
+and the whole script as a grid, ✓ done and ▶
 next. Progress is kept per subject and session across restarts; click a cell
 to jump to it, **reset progress** to start over.
 
 **Bottom bar** — subject ID (a list of the IDs already used, so a second day
 is spelled the same), session (1 or 2), weight, height, experience; Record;
-the Space button, which says what Space will do; discard and touch-down.
+the Space button, which says what Space will do; Z zero.
 Fields are remembered in `mat_ui_settings.json` (local, gitignored — it holds
 body weights).
 
@@ -44,19 +43,18 @@ body weights).
 | `Space` | empty hold, mat ready → start the next pose; pose → end it and start an empty hold. Before the mat is ready it asks for a second press |
 | `X` | during a pose: it failed — end it as discarded, the step stays to redo. Between poses: discard the hold just saved (press twice) |
 | `T` | during a pose: log a touch-down (raised foot touching the mat). Otherwise, while recording: log a `mark`, a moment to look at with `debug_map.py` |
-| `S` | flip the side the staff call, for dog B (which hand) and bridge A (which foot) |
+| `S` | flip the side the staff call, for dog B (which hand), bridge A (which foot) and twist A (which hip) |
 | `←` `→` | move through the script without recording |
-| `Z` | take the mat as it is now as empty — between recordings only |
-| `D` | show raw and net counts on the bands, and how long ago the mat was zeroed |
+| `Z` | take the mat as it is now as empty (also a button) — not during a pose |
+| `D` | show raw and net counts on the bands, and how long ago the mat was zeroed (next to the Footprint title) |
 
 **The empty hold** starts with Record and after every pose. It is *ready* once
 every band has been clean for 7 s; that 7 s becomes the empty reading the next
 pose is measured against, and is written to the holds file. Ready stays ready:
 the subject stepping on afterwards is expected — that is when the map shows
 whether they are on the right bands, before Space starts the hold.
-Outside a timed pose — before Record too — the empty reading is also renewed
-whenever the whole mat has been plainly clean for 3 s, so drift does not pile
-up between empty holds (`findings.md` 8.12).
+Outside empty holds the empty reading changes only when the operator zeroes:
+if a band lingers lit with nobody on the mat, press **Z**.
 
 Hotkeys are ignored while a text box has focus. **Closing the window while
 recording stops the recording first**, so the hold in progress and the sidecar

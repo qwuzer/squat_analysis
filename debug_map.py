@@ -73,17 +73,18 @@ def replay(t, ch, holds):
         fp = (footprint_of(cur) if cur else
               P.EMPTY_FOOTPRINT if clearing else
               footprint_of(poses[done][0]) if done < len(poses) else None)
-        want = fp.bands() if fp else set()
+        loaded = {b for b in BAND_CH if net[b] >= P.LOAD_ON}
+        need, allowed = fp.fit(loaded) if fp else (set(), set())
         look = {}
         for b in BAND_CH:
-            on = net[b] >= P.LOAD_ON
+            on = b in loaded
             if clearing:
                 st = tr.state.get(b, 'clean')
                 look[b] = None if st == 'clean' else st
-            elif b in want:
-                look[b] = 'ok' if on else 'missing'
+            elif on:
+                look[b] = 'ok' if b in allowed else 'extra'
             else:
-                look[b] = 'extra' if on else None
+                look[b] = 'missing' if b in need else None
         out.append((now, net, dict(tr.ref), look))
     return out
 
