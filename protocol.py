@@ -2,7 +2,7 @@
 protocol.py — the collection script, and which bands each pose should load.
 
 The order, targets and read-out instructions follow the subject guide
-(瑜伽壓力墊實驗：受試者動作指引): six poses, the one-sided ones done right side
+(瑜伽壓力墊實驗：受試者動作指引): seven poses, the one-sided ones done right side
 first; each pose-side 3 correct holds of 30 s, then error A and error B once,
 20 s each. mat_ui walks through STEPS so the operator never picks a label.
 
@@ -50,19 +50,27 @@ class Footprint:
         self.need = [_bands(n) for n in need]
         self.may = _bands(may) if may else ()
 
+    def _best(self, loaded):
+        best = None
+        for need in self.need:
+            missing = [b for b in need if b not in loaded]
+            extra = sorted(b for b in loaded if b not in self.bands())
+            score = len(missing) + len(extra)
+            if best is None or score < best[0]:
+                best = (score, missing, extra, need)
+        return best
+
     def check(self, loaded):
         """loaded: set of band names over the threshold.
         Returns (ok, missing, extra) for the alternative that fits best."""
-        best = None
-        for need in self.need:
-            allowed = set(need) | set(self.may) | {b for n in self.need for b in n}
-            missing = [b for b in need if b not in loaded]
-            extra = sorted(b for b in loaded if b not in allowed)
-            score = len(missing) + len(extra)
-            if best is None or score < best[0]:
-                best = (score, missing, extra)
-        _, missing, extra = best
+        _, missing, extra, _ = self._best(loaded)
         return not missing and not extra, missing, extra
+
+    def fit(self, loaded):
+        """What the map draws: (the bands the best-fitting alternative needs,
+        every band that may be loaded). Dog's other hand row and a resting
+        leg are allowed, never `missing`."""
+        return set(self._best(loaded)[3]), self.bands()
 
     def bands(self):
         """Every band the pose may load: what the map outlines."""
@@ -121,6 +129,25 @@ POSES = [
      '雙手輕放兩側，不要壓墊子。腳跟往下踩，臀部抬起，肩膀到膝蓋成一直線。',
      {'A': ('weight on one foot', '把重量移到{side}腳。', None),
       'B': ('weight on toes', '把重量移到腳尖，腳跟放輕。', None)}),
+    # half lord of the fishes: sit bones on the middle mat's back bands, the
+    # raised knee's heel on its front band; the straight leg rests along the
+    # other column and may or may not read. A: the staff pick the hip to lift.
+    ('twist_R', 'Twist R', Footprint('2:BL BR TR', may='2:TL 1:TL BL'),
+     '坐在中墊，面向前方，左、右坐骨各壓在中墊後排左、右條。左腿往前伸直，放在墊子左側。'
+     '右膝立起，右腳跟踩在中墊前排右條，腳趾朝前。右手撐在右臀外側、感測條外。'
+     '吐氣時從腰腹溫和往右轉，左手抱住右膝。雙側坐骨平均壓地。',
+     {'A': ('one hip lifted', '把{side}側的臀部稍微抬離地面。',
+            Footprint('2:BL TR', '2:BR TR', may='2:TL 1:TL BL')),
+      'B': ('raised foot heel up', '立起那隻腳的腳跟抬起，只用腳尖著地。',
+            Footprint('2:BL BR', may='2:TR TL 1:TL BL BR'))}),
+    ('twist_L', 'Twist L', Footprint('2:BL BR TL', may='2:TR 1:TR BR'),
+     '坐在中墊，面向前方，左、右坐骨各壓在中墊後排左、右條。右腿往前伸直，放在墊子右側。'
+     '左膝立起，左腳跟踩在中墊前排左條，腳趾朝前。左手撐在左臀外側、感測條外。'
+     '吐氣時從腰腹溫和往左轉，右手抱住左膝。雙側坐骨平均壓地。',
+     {'A': ('one hip lifted', '把{side}側的臀部稍微抬離地面。',
+            Footprint('2:BL TL', '2:BR TL', may='2:TR 1:TR BR')),
+      'B': ('raised foot heel up', '立起那隻腳的腳跟抬起，只用腳尖著地。',
+            Footprint('2:BL BR', may='2:TL TR 1:TR BR BL'))}),
 ]
 
 SIDES = {'R': ('右', 'right'), 'L': ('左', 'left')}
@@ -132,7 +159,7 @@ class Step:
     def __init__(self, pose, label, cond, rep, target, what, say, footprint):
         self.pose, self.label, self.cond, self.rep = pose, label, cond, rep
         self.target, self.what, self._say, self.footprint = target, what, say, footprint
-        self.sided = '{side}' in say       # staff pick the side (dog B, bridge A)
+        self.sided = '{side}' in say       # staff pick the side (dog B, bridge A, twist A)
 
     @property
     def key(self):
@@ -185,13 +212,9 @@ DROP = 300
 DROP_FRAC = 0.3      # ...and at least this share of the band's load in the pose
 STEADY = 60          # counts: change between the last two 1-s means
 CLEAN_S = 7          # seconds of clean mat an empty hold needs
-# Outside a timed pose the empty reading is also renewed whenever every band
-# has been within CLEAN of it and steady for WATCH_S, so drift and the small
-# leftover after a step-off never pile up. Mat 2 drifted ~300 counts in 25 min
-# and keeps +150…+270 for 10 s after a step-off (test_20261110). Only the
-# plain clean test: telling leftover from a foot needs the subject told to
-# step off, which is the empty hold.
-WATCH_S = 3
+# Outside empty holds the empty reading changes only when the operator zeroes
+# (Z). An automatic renewal after 3 s of clean mat was tried and removed
+# (findings 8.12).
 # A band's first step-off after a pose loaded it takes whatever steady level it
 # settles to as its empty reading, however high. On test_20261112 Mat 2 kept
 # +400…+700 per band after a stand, 70–90% of its load: no drop rule can tell
@@ -208,8 +231,7 @@ class Tracker:
     An empty hold is `ready` once the mat has been clean for CLEAN_S; the last
     CLEAN_S of that stretch becomes the reference the next pose is measured
     against. Ready latches: the subject stepping on afterwards is expected.
-    Outside a timed pose the reference is also renewed after WATCH_S of a
-    plainly clean mat, before Record included."""
+    Otherwise the reference changes only on zero()."""
 
     def __init__(self):
         self.ref = None          # band -> empty reading the map is measured against
@@ -241,8 +263,6 @@ class Tracker:
             if t >= self._next_sec:
                 self._pose_secs.append(self._mean(t - 1, t + 1))
                 self._next_sec = t + 1
-        else:
-            self._watch_tick(t, sample)
 
     def _mean(self, t0, t1):
         rows = [s for t, s in self._hist if t0 <= t < t1]
@@ -355,26 +375,12 @@ class Tracker:
                                  if v - self.ref[b] >= LOAD_ON}
             self._take_ref(t)
 
-    def _watch_tick(self, t, sample):
-        now = self._mean(t - 1, t + 1)
-        before = self._mean(t - 2, t - 1)
-        if now is None or before is None or self.ref is None:
-            return
-        if not all(v - self.ref[b] < CLEAN and abs(v - before[b]) <= STEADY
-                   for b, v in now.items()):
-            self._clean = []
-            return
-        self._clean.append((t, sample))
-        if t - self._clean[0][0] >= WATCH_S:
-            self._take_ref(t)
-
     def _take_ref(self, t):
-        """The clean stretch becomes the empty reading. In an empty hold it is
-        also the window logged to the holds file, so the newest one wins."""
+        """The clean stretch becomes the empty reading, and the window logged
+        to the holds file."""
         n = len(self._clean)
         self.ref = {b: sum(s[b] for _, s in self._clean) / n
                     for b in self._clean[0][1]}
-        if self.in_empty:
-            self.ready_window = (self._clean[0][0], t)
+        self.ready_window = (self._clean[0][0], t)
         self.zeroed_at = t
         self._clean = []

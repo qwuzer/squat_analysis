@@ -413,10 +413,7 @@ class App:
 
         left = self._card(body, 'Footprint', 'load above the last empty reading')
         left.grid(row=0, column=0, sticky='nsew', padx=(14, 7), pady=10)
-        self._verdict = tk.Label(left.body, text='', bg=CARD, fg=MUTED,
-                                 font=(FONT, 15, 'bold'), anchor='w',
-                                 justify='left', wraplength=520)
-        self._verdict.pack(side='bottom', fill='x', pady=(8, 0))
+        self._map_sub = left.sub
         self._map = FootprintMap(left.body)
         self._map.pack(fill='both', expand=True)
 
@@ -451,25 +448,17 @@ class App:
         self._bar_fill = self._bar.create_rectangle(0, 0, 0, 10, fill=ACCENT,
                                                     outline='')
 
-        tk.Label(b, text='READ OUT', bg=CARD, fg=MUTED,
-                 font=(FONT, 8, 'bold')).pack(anchor='w')
-        self._say_lbl = tk.Label(b, text='', bg=CARD, fg=FG, anchor='nw',
-                                 justify='left', font=(FONT, 13),
-                                 wraplength=600, height=3)
-        self._say_lbl.pack(fill='x', pady=(2, 12))
-        b.bind('<Configure>', lambda e: self._say_lbl.config(
-            wraplength=max(200, e.width - 10)))
-
         tk.Label(b, text='SCRIPT', bg=CARD, fg=MUTED,
                  font=(FONT, 8, 'bold')).pack(anchor='w')
         grid = tk.Frame(b, bg=CARD)
         grid.pack(fill='x', pady=(4, 0))
-        # eight pose-sides in two blocks of four, so the whole script fits
+        # the pose-sides in two blocks side by side, so the whole script fits
         sides = []
         for i, st in enumerate(P.STEPS):
             if not sides or sides[-1][0] != st.label:
                 sides.append((st.label, []))
             sides[-1][1].append(i)
+        per = (len(sides) + 1) // 2
         self._cells = {}             # step index -> label
         for block in range(2):
             c0 = block * 7
@@ -479,7 +468,7 @@ class App:
                 tk.Label(grid, text=h, bg=CARD, fg=MUTED, font=(FONT, 8, 'bold'),
                          width=2 if c else 12, anchor='center' if c else 'w'
                          ).grid(row=0, column=c0 + c)
-            for r, (label, idxs) in enumerate(sides[block * 4:block * 4 + 4]):
+            for r, (label, idxs) in enumerate(sides[block * per:block * per + per]):
                 tk.Label(grid, text=label, bg=CARD, fg=FG, font=(FONT, 10),
                          anchor='w', width=12).grid(row=r + 1, column=c0, sticky='w')
                 for i in idxs:
@@ -503,9 +492,8 @@ class App:
         head.pack(fill='x', pady=(0, 8))
         tk.Label(head, text=title, bg=CARD, fg=FG,
                  font=(FONT, 11, 'bold')).pack(side='left')
-        if subtitle:
-            tk.Label(head, text=subtitle, bg=CARD, fg=MUTED,
-                     font=(FONT, 8)).pack(side='left', padx=(10, 0))
+        card.sub = tk.Label(head, text=subtitle, bg=CARD, fg=MUTED, font=(FONT, 8))
+        card.sub.pack(side='left', padx=(10, 0))
         card.body = tk.Frame(card, bg=CARD)
         card.body.pack(fill='both', expand=True)
         return card
@@ -603,11 +591,9 @@ class App:
             cursor='hand2', padx=10, pady=3, disabledforeground=MUTED,
             command=self._space)
         self._go_btn.pack(side='left', padx=(8, 0))
-        for text, fn in (('X  discard', self._discard),
-                         ('T  touch-down', self._touchdown)):
-            tk.Button(btns, text=text, relief='flat', bd=0, bg=GRID, fg=FG,
-                      activebackground=BORDER, font=(FONT, 9), cursor='hand2',
-                      padx=8, pady=3, command=fn).pack(side='left', padx=(6, 0))
+        tk.Button(btns, text='Z  zero', relief='flat', bd=0, bg=GRID, fg=FG,
+                  activebackground=BORDER, font=(FONT, 9), cursor='hand2',
+                  padx=8, pady=3, command=self._zero).pack(side='left', padx=(6, 0))
         self._style_record_btn(False)
 
     def _style_record_btn(self, recording):
@@ -852,7 +838,9 @@ class App:
     def _zero(self):
         """Take the mat as it is now as empty — only between recordings or
         during an empty hold, never with someone in a pose."""
+        self.root.focus_set()          # Space must not re-press the button
         if self._hold and self._hold['name'] != EMPTY:
+            self._say('no zeroing during a pose', WARN_COL)
             return
         self._tracker.zero()
         self._say('zeroed — the mat as it is now reads as empty', ACCENT)
@@ -900,8 +888,7 @@ class App:
                                  'experience': f['experience'] or None,
                                  'session': int(f['session'] or 1)},
                 'footprint_check': {'load_on': P.LOAD_ON, 'clean': P.CLEAN,
-                                    'drop': P.DROP, 'clean_s': P.CLEAN_S,
-                                    'watch_s': P.WATCH_S},
+                                    'drop': P.DROP, 'clean_s': P.CLEAN_S},
             })
             if self._video:
                 self._video.start(path[:-4], self._recorder.perf0)
@@ -964,8 +951,8 @@ class App:
         h = self._hold
         clearing = h and h['name'] == EMPTY and not tr.ready
         fp = self._target()
-        want = fp.bands()
         loaded = {b for b, v in net.items() if v >= P.LOAD_ON}
+        need, allowed = fp.fit(loaded)
         total = sum(max(0.0, net.get(b, 0)) for b in loaded) or 1.0
         looks = {}
         for band in BAND_CH:
@@ -983,9 +970,9 @@ class App:
                     look = (_blend(TILE, MUTED, 0.18), BORDER, '', 1.5, 'offset')
                 else:
                     look = (TILE, BORDER, '', 1.5, '')
-            elif band in want and on:
+            elif band in allowed and on:
                 look = (_blend(CARD, OK_COL, depth * 0.75), OK_COL, '', 2, text)
-            elif band in want:
+            elif band in need:
                 look = (CARD, ERR_COL, (5, 4), 2.5, 'missing')
             elif on:
                 look = (_blend(CARD, WARN_COL, depth * 0.75), WARN_COL, '', 2, text)
@@ -997,32 +984,6 @@ class App:
         self._map.show(looks)
         return fp, loaded
 
-    def _verdict_text(self, fp, loaded):
-        """One line, readable from the mat: is the subject where they should be?"""
-        tr, h = self._tracker, self._hold
-        if h and h['name'] == EMPTY and not tr.ready:
-            still = [b for b, s in tr.state.items() if s == 'loaded']
-            if still:
-                return ('Still on the mat: ' + ', '.join(P.band_name(b) for b in still[:3]),
-                        ERR_COL)
-            return (f'Mat clearing — {tr.clean_s(time.perf_counter()):.0f} / {P.CLEAN_S} s clean',
-                    WARN_COL)
-        ok, missing, extra = fp.check(loaded)
-        pose = self._step().label if not (h and h['name'] != EMPTY) else h['step'].label
-        if not loaded:
-            if h and h['name'] == EMPTY:
-                return f'✓ Mat zeroed — subject can get into {pose}', OK_COL
-            return 'Nothing on the mat', MUTED
-        if ok:
-            tail = '' if (h and h['name'] != EMPTY) else ' — Space when settled'
-            return f'✓ Footprint matches {pose}{tail}', OK_COL
-        parts = []
-        if missing:
-            parts.append('missing ' + ', '.join(P.band_name(b) for b in missing))
-        if extra:
-            parts.append('extra ' + ', '.join(P.band_name(b) for b in extra))
-        return '✗ ' + ';  '.join(parts), ERR_COL if missing else WARN_COL
-
     def _update_protocol(self, fp, loaded):
         rec, h, tr = self._recorder, self._hold, self._tracker
         now = rec.elapsed
@@ -1031,7 +992,6 @@ class App:
         posing = h and h['name'] != EMPTY
         st = h['step'] if posing else self._step()
         self._show(self._title, st.title(self._side), FG if posing else MUTED)
-        self._show(self._say_lbl, st.say(self._side), FG)
 
         if not rec.active:
             phase, pcol = 'NOT RECORDING', MUTED
@@ -1104,7 +1064,6 @@ class App:
             else:
                 cell.config(text='·', fg=MUTED, bg=CARD)
         self._shown_text.pop(self._title, None)
-        self._shown_text.pop(self._say_lbl, None)
 
     def _update_status(self):
         if self._flash and time.monotonic() < self._flash[2]:
@@ -1180,11 +1139,11 @@ class App:
             self._tracker.push(time.perf_counter(),
                                {b: float(self._data[ch]) for b, ch in BAND_CH.items()})
         fp, loaded = self._update_map()
-        text, colour = self._verdict_text(fp, loaded)
         z = self._tracker.zeroed_at
+        sub = 'load above the last empty reading'
         if self._details and z is not None:     # is the empty reading fresh?
-            text += f'   ·   zeroed {time.perf_counter() - z:.0f} s ago'
-        self._show(self._verdict, text, colour)
+            sub += f'  ·  zeroed {time.perf_counter() - z:.0f} s ago'
+        self._show(self._map_sub, sub, MUTED)
         self._update_protocol(fp, loaded)
         self._update_status()
 

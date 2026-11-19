@@ -1,6 +1,6 @@
 # Collection Protocol
 
-> Six poses on three mats, each done correctly three times and with two
+> Seven poses on three mats, each done correctly three times and with two
 > scripted errors. The subject-facing version, with drawings, is the guide
 > 瑜伽壓力墊實驗：受試者動作指引; the order, targets and footprints the app
 > runs are in `protocol.py`. Replaces the Oct 2026 single-mat protocol
@@ -21,9 +21,10 @@ bands — left and right, front and back. "Left" is as seen facing the front.
 | Downward dog | hands on the front mat, row 1 or 2 by height; feet on the back mat | both hand bands of that row; both **front** bands of the back mat — heels off | too much weight in hands | uneven hands (staff pick the side) |
 | Forearm plank | forearms on the front mat, toes on the back mat | all four on the front mat; both front bands of the back mat | hips piked | hips sagging (mild only) |
 | Bridge | feet on the front mat, shoulders on the middle mat | all four on the front mat; both back bands of the middle mat | weight on one foot (staff pick the side) | weight on toes |
+| Seated twist (半魚王式) R, then L | sitting on the middle mat | both back bands of the middle mat (sit bones); the raised knee's heel on its front band. The straight leg rests along the other column and may or may not read | one hip lifted (staff pick the side) | raised foot's heel up, toes only |
 
-The plank toe band and the bridge shoulder band are first guesses, to be
-confirmed in the pilot.
+The plank toe band, the bridge shoulder band and the twist's resting leg are
+first guesses, to be confirmed in the pilot.
 
 **Per pose-side:** 3 correct holds of 30 s, then error A and error B once,
 20 s each. Errors are performed only when told, in the guide's words.
@@ -61,8 +62,8 @@ walks through the script, so there is no label to choose.
 1. Fill in **subject ID, session, weight, height, experience**.
 2. Have the subject **off all three mats** — step off to the side; the row is
    over 1.5 m long — and press **Record**. An empty hold starts.
-3. Wait for **EMPTY · READY** (7 s of clean mat). Read out the instruction on
-   screen and have the subject get into the pose.
+3. Wait for **EMPTY · READY** (7 s of clean mat). Read out the guide's
+   instruction and have the subject get into the pose.
 4. Watch the **footprint**. Green everywhere it should be, nothing orange: the
    subject is on the right bands. Red dashed `missing` or orange `extra`: fix
    the placement first.
@@ -86,8 +87,11 @@ problem only after Space: **X X** between poses discards the hold just saved.
 the check is wrong (a band reads loaded with nobody on it) — say so in the
 notes; that hold's empty reading is then the previous one.
 
-For dog B and bridge A the staff pick the side: press **S** to flip it before
-starting; the hold is saved as `dog_B_L` / `dog_B_R`.
+For dog B, bridge A and twist A the staff pick the side: press **S** to flip
+it before starting; the hold is saved as `dog_B_L` / `dog_B_R`.
+
+**A band stays lit with nobody on the mat** (outside an empty hold): press
+**Z** or the **Z zero** button. Never during a pose.
 
 Press **Stop** at the end. A graph and one video frame per hold are written
 into the session folder a few seconds later (`recording_format.md` §2).
@@ -99,10 +103,10 @@ into the session folder a few seconds later (`recording_format.md` §2).
 | | |
 | --- | --- |
 | Consent, weigh, measure, brief | 5 min |
-| 8 pose-sides × (3 × 30 s + 2 × 20 s) of holds | 17 min |
-| 40 empty holds × ~10–12 s | 7–8 min |
-| Instructions, getting into poses, rest between poses | ~10 min |
-| **Per session** | **~40 min** |
+| 10 pose-sides × (3 × 30 s + 2 × 20 s) of holds | 22 min |
+| 50 empty holds × ~10–12 s | 8–10 min |
+| Instructions, getting into poses, rest between poses | ~12 min |
+| **Per session** | **~47 min** |
 
 ---
 
@@ -113,7 +117,7 @@ analyse.** Check before scaling up:
 
 | Check | Why |
 | --- | --- |
-| Footprint `ok` in the holds files for most correct holds | The placements and the plank / bridge bands are right |
+| Footprint `ok` in the holds files for most correct holds | The placements and the plank / bridge / twist bands are right |
 | Each error moves its expected ratio beyond the subject's own spread across correct holds | The error is observable; otherwise replace it (plank sag → uneven forearms) |
 | Tree R and tree L mirror each other | Hardware and layout validity |
 | Per-port frame counts in the sidecars ≈ `rate_hz × duration` | The 100 Hz grid was not undersampling |

@@ -196,7 +196,6 @@ come from 8.11:
 | `DROP` / `DROP_FRAC` | 300 / 0.3 | …or one that fell this far from its pose level (the 8.10 offset). At a band's first step-off in a recording, any steady fall below its pose level will do (8.12) |
 | `STEADY` | 60 | counts between consecutive 1-s means for a band to be steady |
 | `CLEAN_S` | 7 | clean seconds an empty hold needs before the next pose |
-| `WATCH_S` | 3 | outside a timed pose, plainly clean seconds that renew the empty reading (8.12) |
 
 The slope settings below were the old display's. They are kept in `mat_log.py`,
 which still measures against them, and recorded here for the history.
@@ -314,6 +313,10 @@ leftover, or the level sinks toward it (test_20261110_143750: 2.TL sat
 +250…+300 after the step-offs and the hold never went ready; it now goes ready
 9 s after the last step-off). Press `D` to see how old the empty reading is.
 
+*Removed 2026-11-19:* the renewal outside poses (`WATCH_S`). The operator
+preferred to zero by hand (`Z`, now also a button), so outside empty holds the
+empty reading changes only then. The empty-hold rules above are unchanged.
+
 The same creep shows in tree: the subject stands on both feet, then lifts one,
 and on Mat 2 the lifted foot's bands can stay +250…+400 for the hold (yj 10-01,
 changjian's last tree R). Re-zeroing cannot help — nobody steps off. Across the
@@ -341,7 +344,7 @@ unchanged, and ending each of their 27 poses halfway, with the subject still on
 the mat, never reads ready (a foot left on a band does not fall below its pose
 level). The risk is the operator's: at the first step-off the subject must be
 fully off, or the foot becomes the empty reading. If it does, the band reads
-negative once the foot leaves, and the clean renewal fixes it within 3 s.
+negative once the foot leaves; the next empty hold, or Z, fixes it.
 
 ## 9. What we are missing
 
